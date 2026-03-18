@@ -1,0 +1,30 @@
+services:
+  garmin-grafana-mcp-server:
+    build: .
+    container_name: garmin-grafana-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    env_file:
+      - .env
+    volumes:
+      - ./:/app
+    command: uvicorn server:app --host 0.0.0.0 --port 8765 --reload
+    environment:
+      # Point to the InfluxDB container on the shared garmin-grafana network.
+      # If your garmin-grafana docker-compose names the service differently,
+      # update INFLUXDB_HOST to match.
+      INFLUXDB_HOST: influxdb
+      MCP_HOST: "0.0.0.0"
+      MCP_PORT: "8765"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  default:
+    external: true
+    name: garmin-grafana_default

@@ -7,7 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Sensible defaults for zero-config Docker deployment** — fix
+  `MEASUREMENT_ACTIVITIES` default from `Activities` → `ActivitySummary`,
+  `MEASUREMENT_RESTING_HR` default from `RestingHeartRate` → `DailyStats`, and
+  `MEASUREMENT_HRV` default from `HRV` → `HRV_Intraday` in `influx.py` to
+  match the standard garmin-grafana schema. Users pulling the pre-built GHCR
+  image no longer need to provide any schema environment variables.
+
 ### Added
+
+- **Quick Start (Docker Compose) section** in `README.md` — copy-pasteable
+  `docker-compose.yml` snippet using the public GHCR image with an inline
+  `environment:` block. Lists required variables (URL, credentials, database)
+  and optional schema overrides (measurement and field names, commented out).
 
 - **HR zone percentages** across all tools that return zone data:
   - `get_recent_activities` / `get_last_activity` — `normalise_activity()` now

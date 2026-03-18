@@ -24,9 +24,9 @@ INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "")           # v2 only
 INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "")       # v2 only
 
 # Measurement names — override if your garmin-grafana schema differs
-MEASUREMENT_ACTIVITIES = os.getenv("MEASUREMENT_ACTIVITIES", "Activities")
-MEASUREMENT_RESTING_HR = os.getenv("MEASUREMENT_RESTING_HR", "RestingHeartRate")
-MEASUREMENT_HRV = os.getenv("MEASUREMENT_HRV", "HRV")
+MEASUREMENT_ACTIVITIES = os.getenv("MEASUREMENT_ACTIVITIES", "ActivitySummary")
+MEASUREMENT_RESTING_HR = os.getenv("MEASUREMENT_RESTING_HR", "DailyStats")
+MEASUREMENT_HRV = os.getenv("MEASUREMENT_HRV", "HRV_Intraday")
 
 # Measurement names for recovery, detail, fitness, and zone tools
 MEASUREMENT_DAILY_STATS = os.getenv("MEASUREMENT_DAILY_STATS", "DailyStats")

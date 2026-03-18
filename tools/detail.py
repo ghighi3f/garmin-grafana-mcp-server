@@ -84,17 +84,37 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
     if ts and hasattr(ts, "isoformat"):
         ts = ts.isoformat()
 
-    # HR zones: seconds → minutes
-    def _zone_min(field_name):
-        val = safe_float(raw.get(field_name))
-        return round(val / 60.0, 1) if val else None
+    # HR zones: seconds → minutes + percentage of total zone time
+    _zone_secs = [
+        safe_float(raw.get(influx.FIELD_HR_ZONE_1)) or 0.0,
+        safe_float(raw.get(influx.FIELD_HR_ZONE_2)) or 0.0,
+        safe_float(raw.get(influx.FIELD_HR_ZONE_3)) or 0.0,
+        safe_float(raw.get(influx.FIELD_HR_ZONE_4)) or 0.0,
+        safe_float(raw.get(influx.FIELD_HR_ZONE_5)) or 0.0,
+    ]
+    _zone_mins = [round(s / 60.0, 1) for s in _zone_secs]
+    _total_zone_min = sum(_zone_mins)
+
+    def _zone_pct(val):
+        return round(val / _total_zone_min * 100.0, 1) if _total_zone_min > 0 else None
 
     hr_zones = {
-        "zone_1_minutes": _zone_min(influx.FIELD_HR_ZONE_1),
-        "zone_2_minutes": _zone_min(influx.FIELD_HR_ZONE_2),
-        "zone_3_minutes": _zone_min(influx.FIELD_HR_ZONE_3),
-        "zone_4_minutes": _zone_min(influx.FIELD_HR_ZONE_4),
-        "zone_5_minutes": _zone_min(influx.FIELD_HR_ZONE_5),
+        "zone_1_minutes": _zone_mins[0] or None,
+        "zone_1_pct": _zone_pct(_zone_mins[0]),
+        "zone_2_minutes": _zone_mins[1] or None,
+        "zone_2_pct": _zone_pct(_zone_mins[1]),
+        "zone_3_minutes": _zone_mins[2] or None,
+        "zone_3_pct": _zone_pct(_zone_mins[2]),
+        "zone_4_minutes": _zone_mins[3] or None,
+        "zone_4_pct": _zone_pct(_zone_mins[3]),
+        "zone_5_minutes": _zone_mins[4] or None,
+        "zone_5_pct": _zone_pct(_zone_mins[4]),
+    } if _total_zone_min > 0 else {
+        "zone_1_minutes": None, "zone_1_pct": None,
+        "zone_2_minutes": None, "zone_2_pct": None,
+        "zone_3_minutes": None, "zone_3_pct": None,
+        "zone_4_minutes": None, "zone_4_pct": None,
+        "zone_5_minutes": None, "zone_5_pct": None,
     }
 
     activity_out: dict[str, Any] = {

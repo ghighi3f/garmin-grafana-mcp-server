@@ -134,6 +134,28 @@ def normalise_activity(row: dict) -> dict:
         avg_pace = None
         avg_speed_out = None
 
+    # HR zones: seconds → minutes + percentage of total zone time
+    _zone_fields = [FIELD_HR_ZONE_1, FIELD_HR_ZONE_2, FIELD_HR_ZONE_3, FIELD_HR_ZONE_4, FIELD_HR_ZONE_5]
+    _zone_secs = [safe_float(pick(row, f)) or 0.0 for f in _zone_fields]
+    _zone_mins = [round(s / 60.0, 1) for s in _zone_secs]
+    _total_zone_min = sum(_zone_mins)
+
+    def _zone_pct(val):
+        return round(val / _total_zone_min * 100.0, 1) if _total_zone_min > 0 else None
+
+    hr_zones = {
+        "zone_1_minutes": _zone_mins[0] or None,
+        "zone_1_pct": _zone_pct(_zone_mins[0]),
+        "zone_2_minutes": _zone_mins[1] or None,
+        "zone_2_pct": _zone_pct(_zone_mins[1]),
+        "zone_3_minutes": _zone_mins[2] or None,
+        "zone_3_pct": _zone_pct(_zone_mins[2]),
+        "zone_4_minutes": _zone_mins[3] or None,
+        "zone_4_pct": _zone_pct(_zone_mins[3]),
+        "zone_5_minutes": _zone_mins[4] or None,
+        "zone_5_pct": _zone_pct(_zone_mins[4]),
+    } if _total_zone_min > 0 else None
+
     activity_id = pick(row, "Activity_ID", "ActivityID", "activity_id", "activityId")
 
     ts = row.get("time") or row.get("timestamp")
@@ -154,6 +176,7 @@ def normalise_activity(row: dict) -> dict:
         "elevation_gain_m": elev,
         "avg_cadence": cadence,
         "normalized_power": np_val,
+        "hr_zones": hr_zones,
     }
 
 

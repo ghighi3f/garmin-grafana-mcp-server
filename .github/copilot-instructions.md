@@ -74,6 +74,43 @@ All field and measurement names are configurable via env vars — see `.env.exam
    `{"error": ..., "hint": ..., "detail": ...}` dict; never raises to the LLM.
 7. **No planning logic** — tools return raw data only. The LLM decides what it means.
 
+## Git & Workflow Rules
+
+These rules are mandatory for the agent to follow whenever the user requests a code change, bugfix, or feature addition. They sit alongside the architectural and InfluxDB schema guidance above and are intended to keep the repository consistent and CI/CD-friendly.
+
+1. Branch Management:
+    - NEVER write code directly on the `main` branch.
+    - Before making edits, the agent MUST check the current git branch. If the working branch is `main`, the agent must either:
+       - create and switch to a new descriptive branch using a command such as:
+          `git checkout -b feature/add-hr-zones`, or
+       - ask the user for the preferred branch name before creating it if the agent cannot run terminal commands itself.
+    - Branch names should be hyphen-separated and descriptive: `type/short-description` (examples: `feat/add-training-zones`, `fix/hvr-query`).
+
+2. Changelog Updates:
+    - Any time a feature is added, modified, or fixed, the agent MUST update `CHANGELOG.md`.
+    - Follow the "Keep a Changelog" format. Place new entries under the `## [Unreleased]` section and include a concise, one-line headline and optionally a short bullet list describing the change.
+    - Example entry:
+       - `### Added`
+          - `- Add HR zone percentages to normalise_activity()` — returns zone_N_pct for zones 1–5.`
+    - The agent must include the changelog edit in the same commit as the code change (or in the same branch before creating the PR).
+
+3. Commit & Pull Request Prep:
+    - After implementing changes and updating `CHANGELOG.md`, the agent MUST propose a clear, standardized commit message and remind the user to push the branch to trigger CI/CD.
+    - Commit message format examples:
+       - `feat(<scope>): short description` — for new features
+       - `fix(<scope>): short description` — for bug fixes
+       - `docs: update copilot-instructions.md (Git & Workflow Rules)` — for documentation-only edits
+    - The agent should include the changelog, tests (if applicable), and any relevant notes in the commit.
+    - The agent MUST not merge directly into `main`. Instead, push the branch and create a pull request with a descriptive title and body listing:
+       - What changed (files and high-level summary)
+       - How to test or verify locally
+       - Any rollout or CI considerations
+
+Enforcement:
+- If the agent cannot run git commands in the environment, it must present the exact commands to the user and clearly explain the required steps to create the branch, commit, push, and open a PR.
+- The agent must always include the `CHANGELOG.md` update and the proposed commit message in its response when returning code changes.
+
+
 ## When adding a new tool
 
 1. Add the query function to `influx.py` (with both v1 and v2 variants).

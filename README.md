@@ -34,6 +34,87 @@ garmin-grafana-mcp-server   ← this repo adds this
 
 ---
 
+## Quick Start (Docker Compose)
+
+If you just want to run the pre-built image alongside your existing garmin-grafana stack, create a `docker-compose.yml` with the snippet below. No need to clone this repository.
+
+```yaml
+services:
+  garmin-grafana-mcp-server:
+    image: ghcr.io/ghighi3f/garmin-grafana-mcp-server:latest
+    container_name: garmin-grafana-mcp-server
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    environment:
+      # ── Required ─────────────────────────────────────────────
+      # Connection to the InfluxDB instance managed by garmin-grafana.
+      INFLUXDB_HOST: influxdb            # container name on the shared Docker network
+      INFLUXDB_PORT: 8086
+      INFLUXDB_DATABASE: GarminStats     # database name from your garmin-grafana .env
+      INFLUXDB_USERNAME: admin           # InfluxDB v1 credentials
+      INFLUXDB_PASSWORD: adminpassword   # ← change to your actual password
+
+      # ── InfluxDB v2 only (uncomment if you run v2) ──────────
+      # INFLUXDB_VERSION: 2
+      # INFLUXDB_TOKEN: "your-influxdb-token"
+      # INFLUXDB_ORG: "your-org"
+
+      # ── Optional: override schema names ─────────────────────
+      # Only needed if your garmin-grafana uses non-default measurement
+      # or field names. The defaults match the standard garmin-grafana schema.
+      #
+      # Measurement names:
+      # MEASUREMENT_ACTIVITIES: ActivitySummary
+      # MEASUREMENT_DAILY_STATS: DailyStats
+      # MEASUREMENT_SLEEP_SUMMARY: SleepSummary
+      # MEASUREMENT_ACTIVITY_SESSION: ActivitySession
+      # MEASUREMENT_ACTIVITY_LAP: ActivityLap
+      # MEASUREMENT_RESTING_HR: DailyStats
+      # MEASUREMENT_HRV: HRV_Intraday
+      # MEASUREMENT_VO2_MAX: VO2_Max
+      # MEASUREMENT_RACE_PREDICTIONS: RacePredictions
+      # MEASUREMENT_BODY_COMPOSITION: BodyComposition
+      #
+      # Field names:
+      # FIELD_RESTING_HR: resting_hr
+      # FIELD_HRV: hrv5MinHigh
+      # FIELD_VO2_MAX_RUNNING: VO2_max_value
+      # FIELD_VO2_MAX_CYCLING: VO2_max_value_cycling
+      # FIELD_RACE_5K: time5K
+      # FIELD_RACE_10K: time10K
+      # FIELD_RACE_HALF: timeHalfMarathon
+      # FIELD_RACE_MARATHON: timeMarathon
+      # FIELD_WEIGHT: weight
+      # FIELD_HR_ZONE_1: hrTimeInZone_1
+      # FIELD_HR_ZONE_2: hrTimeInZone_2
+      # FIELD_HR_ZONE_3: hrTimeInZone_3
+      # FIELD_HR_ZONE_4: hrTimeInZone_4
+      # FIELD_HR_ZONE_5: hrTimeInZone_5
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+networks:
+  default:
+    external: true
+    name: garmin-grafana_default   # ← must match your garmin-grafana network
+```
+
+Then start it:
+
+```bash
+docker compose up -d
+curl http://localhost:8765/health
+```
+
+> **Tip:** The only variables most users need to change are `INFLUXDB_PASSWORD` and possibly `INFLUXDB_DATABASE`. All schema variables have sensible defaults that match the standard garmin-grafana InfluxDB schema out of the box.
+
+---
+
 ## Deployment (Docker — recommended)
 
 This is the recommended way to run the server alongside your existing garmin-grafana stack.

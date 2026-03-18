@@ -96,7 +96,9 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
     _total_zone_min = sum(_zone_mins)
 
     def _zone_pct(val):
-        return round(val / _total_zone_min * 100.0, 1) if _total_zone_min > 0 else None
+        if not val or _total_zone_min <= 0:
+            return None
+        return round(val / _total_zone_min * 100.0, 1)
 
     hr_zones = {
         "zone_1_minutes": _zone_mins[0] or None,

@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Sentinel "No Activity" rows no longer leak into tool responses** — `query_last_activity()`
+  now fetches up to 5 rows and skips rows where `sport_type` normalises to `"no activity"`,
+  returning the first real activity. `query_recent_activities()` filters sentinel rows from
+  the returned list before it reaches any tool. Both `get_last_activity` and
+  `get_recent_activities` / `get_weekly_load_summary` subsequently receive clean data.
+
+- **`duration_minutes` now populated for all activities** — `normalise_activity()` was
+  missing the camelCase field variants used by garmin-grafana (`elapsedDuration`,
+  `movingDuration`, `totalElapsedTime`). The `pick()` call now tries these names first,
+  so elapsed duration converts correctly from seconds to minutes.
+
+- **`avg_resting_hr` and `hrv_weekly_avg` now populated in weekly tools** — the default
+  field names `FIELD_RESTING_HR` and `FIELD_HRV` were `resting_hr` and `hrv5MinHigh`
+  respectively, but the actual garmin-grafana field names are `restingHeartRate` and
+  `hrvValue`. Defaults corrected in `influx.py`; `.env.example` updated to match.
+  Existing deployments must update `FIELD_RESTING_HR=restingHeartRate` and
+  `FIELD_HRV=hrvValue` in their `.env` and redeploy.
+
+- **`zone_N_pct` is now `null` when `zone_N_minutes` is `null`** — previously, minutes
+  for a zero-time zone were `null` (via `0.0 or None`) but the percentage was `0.0`,
+  an inconsistent pair. The `_zone_pct()` helper in both `normalise_activity()` and
+  `tools/detail.py` now returns `null` when the per-zone value is zero or absent.
+
+- **`elevation_gain_m` now picks up `totalAscent`** — garmin-grafana stores this field
+  as `totalAscent` (camelCase); added as first candidate in the `pick()` call inside
+  `normalise_activity()`.
+
+### Added
+
+- **`test_tools.py`** — standalone validation script that calls all seven MCP tool
+  functions directly (no HTTP layer) and prints the full JSON response or any traceback
+  to stdout. Useful for verifying InfluxDB schema field names against live data.
+
 ### Changed
 
 - **Sensible defaults for zero-config Docker deployment** — fix

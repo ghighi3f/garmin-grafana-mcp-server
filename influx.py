@@ -38,8 +38,8 @@ MEASUREMENT_RACE_PREDICTIONS = os.getenv("MEASUREMENT_RACE_PREDICTIONS", "RacePr
 MEASUREMENT_BODY_COMPOSITION = os.getenv("MEASUREMENT_BODY_COMPOSITION", "BodyComposition")
 
 # Field names within measurements — override if your schema uses different names
-FIELD_RESTING_HR = os.getenv("FIELD_RESTING_HR", "resting_hr")
-FIELD_HRV = os.getenv("FIELD_HRV", "hrv5MinHigh")
+FIELD_RESTING_HR = os.getenv("FIELD_RESTING_HR", "restingHeartRate")
+FIELD_HRV = os.getenv("FIELD_HRV", "hrvValue")
 FIELD_VO2_MAX_RUNNING = os.getenv("FIELD_VO2_MAX_RUNNING", "VO2_max_value")
 FIELD_VO2_MAX_CYCLING = os.getenv("FIELD_VO2_MAX_CYCLING", "VO2_max_value_cycling")
 FIELD_RACE_5K = os.getenv("FIELD_RACE_5K", "time5K")
@@ -97,7 +97,8 @@ def normalise_activity(row: dict) -> dict:
     )
 
     duration_raw = safe_float(pick(
-        row, "duration", "elapsed_duration", "total_elapsed_time", "moving_duration"
+        row, "elapsedDuration", "duration", "elapsed_duration",
+        "total_elapsed_time", "totalElapsedTime", "moving_duration", "movingDuration"
     ))
     # duration in seconds → minutes
     duration_minutes = round(duration_raw / 60.0, 2) if duration_raw and duration_raw > 300 else (
@@ -110,7 +111,7 @@ def normalise_activity(row: dict) -> dict:
     if max_hr: max_hr = round(max_hr, 1)
 
     calories = safe_int(pick(row, "calories", "total_calories", "active_calories"))
-    elev = safe_float(pick(row, "elevation_gain", "total_ascent", "ascent", "elevation_gain_m"))
+    elev = safe_float(pick(row, "totalAscent", "elevation_gain", "total_ascent", "ascent", "elevation_gain_m"))
     if elev: elev = round(elev, 1)
 
     cadence = safe_float(pick(row, "average_cadence", "avg_cadence", "averageCadence"))
@@ -141,7 +142,9 @@ def normalise_activity(row: dict) -> dict:
     _total_zone_min = sum(_zone_mins)
 
     def _zone_pct(val):
-        return round(val / _total_zone_min * 100.0, 1) if _total_zone_min > 0 else None
+        if not val or _total_zone_min <= 0:
+            return None
+        return round(val / _total_zone_min * 100.0, 1)
 
     hr_zones = {
         "zone_1_minutes": _zone_mins[0] or None,
@@ -399,9 +402,10 @@ def query_last_activity() -> dict | None:
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
     else:
+        # Fetch a small window so we can skip "No Activity" sentinel rows
         q = (
             f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '
-            f'ORDER BY time DESC LIMIT 1'
+            f'ORDER BY time DESC LIMIT 5'
         )
         try:
             raw_rows = _v1_query(q)
@@ -410,7 +414,11 @@ def query_last_activity() -> dict | None:
 
     if not raw_rows:
         return None
-    return normalise_activity(raw_rows[0])
+    for row in raw_rows:
+        normalised = normalise_activity(row)
+        if normalised.get("sport_type") != "no activity":
+            return normalised
+    return None
 
 
 def query_recent_activities(days: int, sport_type: str | None, limit: int) -> list[dict]:
@@ -457,7 +465,10 @@ def query_recent_activities(days: int, sport_type: str | None, limit: int) -> li
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
 
-    return [normalise_activity(r) for r in raw_rows]
+    return [
+        a for a in (normalise_activity(r) for r in raw_rows)
+        if a.get("sport_type") != "no activity"
+    ]
 
 
 def query_resting_hr_weekly(weeks: int) -> list[dict]:

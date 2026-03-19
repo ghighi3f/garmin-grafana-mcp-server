@@ -173,3 +173,20 @@ python server.py        # → http://localhost:8765/mcp
 ```
 
 For Docker: `docker compose up -d` (requires `garmin-grafana_default` network).
+
+## Release Management Workflow
+
+When it's time to cut a release:
+
+1. Ensure all feature PRs are merged into `development`.
+2. Move entries from `## [Unreleased]` in `CHANGELOG.md` into a new
+   `## [X.Y.Z] - YYYY-MM-DD` section. Push a PR from `development` → `main`.
+3. After the release PR is merged to `main`, pull `main` locally, run
+   `git tag vX.Y.Z`, and `git push origin vX.Y.Z` to trigger the automated
+   GitHub Release and versioned Docker build.
+
+The `docker-publish.yml` workflow handles the rest automatically:
+- **Push to `main`** → builds and pushes the `latest` Docker tag.
+- **Push of `v*.*.*` tag** → builds and pushes versioned Docker tags
+  (e.g. `1.2.0`, `1.2`) and creates a GitHub Release with auto-generated
+  release notes.

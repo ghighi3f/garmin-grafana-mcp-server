@@ -34,6 +34,7 @@ LLM Client  ──HTTP──▶  server.py (FastAPI + FastMCP)
 - `tools/recovery.py` — `get_daily_recovery`.
 - `tools/detail.py` — `get_activity_details`.
 - `tools/fitness.py` — `get_fitness_trend`, `get_training_zones`.
+- `tools/schema.py` — `explore_schema` (AI self-service schema introspection).
 
 ## InfluxDB schema (garmin-grafana)
 
@@ -79,11 +80,14 @@ All field and measurement names are configurable via env vars — see `.env.exam
 These rules are mandatory for the agent to follow whenever the user requests a code change, bugfix, or feature addition. They sit alongside the architectural and InfluxDB schema guidance above and are intended to keep the repository consistent and CI/CD-friendly.
 
 1. Branch Management:
-    - NEVER write code directly on the `main` branch.
-    - Before making edits, the agent MUST check the current git branch. If the working branch is `main`, the agent must either:
-       - create and switch to a new descriptive branch using a command such as:
-          `git checkout -b feature/add-hr-zones`, or
+    - NEVER write code directly on `main` or `development`.
+    - The **base branch** for all new work is `development` (NOT `main`).
+    - Before making edits, the agent MUST check the current git branch. If the working branch is `main` or `development`, the agent must either:
+       - create and switch to a new descriptive branch from `development` using a command such as:
+          `git checkout -b feature/add-hr-zones development`, or
        - ask the user for the preferred branch name before creating it if the agent cannot run terminal commands itself.
+    - Pull Requests should target `development`, NOT `main`.
+    - We only merge `development` into `main` when doing a batch release (this triggers the Docker image build on GHCR).
     - Branch names should be hyphen-separated and descriptive: `type/short-description` (examples: `feat/add-training-zones`, `fix/hvr-query`).
 
 2. Changelog Updates:
@@ -121,6 +125,46 @@ Enforcement:
 5. Always clamp input parameters and handle `ConnectionError`.
 6. Add the tool to the docstring at the top of `server.py`.
 
+## Testing Requirements
+
+This project uses **pytest** for automated testing. All tests must pass before
+opening a Pull Request against the `development` branch.
+
+### Test structure
+
+```
+tests/
+├── conftest.py              # sys.path setup so imports work
+├── test_normalizers.py      # Offline unit tests for normalizer functions + utils
+└── test_live_schema.py      # Live InfluxDB schema validation (skipped if no DB)
+```
+
+### Running tests
+
+```bash
+# Unit tests only (offline, no DB needed):
+pytest tests/test_normalizers.py -v
+
+# Live schema validation (requires InfluxDB + .env):
+pytest tests/test_live_schema.py -v
+
+# Full suite:
+pytest -v
+```
+
+### Rules for the agent
+
+1. **Before creating a PR** against `development`, run `pytest -v` and confirm all
+   tests pass. If live schema tests are skipped (no DB), that is acceptable, but
+   unit tests must pass with zero failures.
+2. **When modifying normalizers** (`normalise_activity`, `normalise_daily_stats`,
+   `normalise_sleep`, `normalise_lap` in `influx.py`), add or update the
+   corresponding tests in `tests/test_normalizers.py`.
+3. **When adding a new measurement or field dependency**, add a schema assertion
+   to `tests/test_live_schema.py` so upstream renames are caught early.
+4. Tests must be runnable **offline** (unit tests) — never import the InfluxDB
+   client at module level in unit test files.
+
 ## Testing locally
 
 ```bash
@@ -129,3 +173,20 @@ python server.py        # → http://localhost:8765/mcp
 ```
 
 For Docker: `docker compose up -d` (requires `garmin-grafana_default` network).
+
+## Release Management Workflow
+
+When it's time to cut a release:
+
+1. Ensure all feature PRs are merged into `development`.
+2. Move entries from `## [Unreleased]` in `CHANGELOG.md` into a new
+   `## [X.Y.Z] - YYYY-MM-DD` section. Push a PR from `development` → `main`.
+3. After the release PR is merged to `main`, pull `main` locally, run
+   `git tag vX.Y.Z`, and `git push origin vX.Y.Z` to trigger the automated
+   GitHub Release and versioned Docker build.
+
+The `docker-publish.yml` workflow handles the rest automatically:
+- **Push to `main`** → builds and pushes the `latest` Docker tag.
+- **Push of `v*.*.*` tag** → builds and pushes versioned Docker tags
+  (e.g. `1.2.0`, `1.2`) and creates a GitHub Release with auto-generated
+  release notes.

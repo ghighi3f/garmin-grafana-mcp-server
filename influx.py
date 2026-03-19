@@ -753,6 +753,92 @@ def query_weight_weekly(weeks: int) -> list[dict]:
         return []
 
 
+def query_field_keys(measurement: str) -> list[dict[str, str]]:
+    """
+    Return field keys and their types for a given measurement.
+    Each entry: {"field": "<name>", "type": "<type>"}.
+    Returns [] on failure.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            import "influxdata/influxdb/schema"
+            schema.measurementFieldKeys(
+                bucket: "{INFLUXDB_DATABASE}",
+                measurement: "{measurement}",
+            )
+            '''
+            client = _v2_client()
+            try:
+                tables = client.query_api().query(q)
+                fields = []
+                for table in tables:
+                    for record in table.records:
+                        fields.append({
+                            "field": record.get_value(),
+                            "type": record.values.get("type", "unknown"),
+                        })
+                return fields
+            finally:
+                client.close()
+        else:
+            client = _v1_client()
+            try:
+                result = client.query(
+                    f'SHOW FIELD KEYS FROM "{measurement}"'
+                )
+                return [
+                    {"field": p["fieldKey"], "type": p.get("fieldType", "unknown")}
+                    for p in result.get_points()
+                ]
+            finally:
+                client.close()
+    except Exception as exc:
+        logger.warning("Could not get field keys for %s: %s", measurement, exc)
+        return []
+
+
+def query_tag_keys(measurement: str) -> list[str]:
+    """
+    Return tag key names for a given measurement.
+    Returns [] on failure.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            import "influxdata/influxdb/schema"
+            schema.measurementTagKeys(
+                bucket: "{INFLUXDB_DATABASE}",
+                measurement: "{measurement}",
+            )
+            '''
+            client = _v2_client()
+            try:
+                tables = client.query_api().query(q)
+                tags = []
+                for table in tables:
+                    for record in table.records:
+                        val = record.get_value()
+                        # Skip internal Flux tags
+                        if not val.startswith("_"):
+                            tags.append(val)
+                return tags
+            finally:
+                client.close()
+        else:
+            client = _v1_client()
+            try:
+                result = client.query(
+                    f'SHOW TAG KEYS FROM "{measurement}"'
+                )
+                return [p["tagKey"] for p in result.get_points()]
+            finally:
+                client.close()
+    except Exception as exc:
+        logger.warning("Could not get tag keys for %s: %s", measurement, exc)
+        return []
+
+
 def query_activity_hr_zones(days: int, limit: int) -> list[dict]:
     """
     Return raw activity rows with HR zone fields for aggregation.

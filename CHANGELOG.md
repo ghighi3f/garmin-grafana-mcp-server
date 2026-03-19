@@ -5,7 +5,45 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.0.0] - 2026-03-19
+
+### Added
+
+- **Automated GitHub Releases** — `docker-publish.yml` now triggers on `v*.*.*`
+  tag pushes in addition to `main` branch pushes. Tag pushes build versioned
+  Docker images (e.g. `:1.2.0`, `:1.2`) and create a GitHub Release with
+  auto-generated release notes via `softprops/action-gh-release@v2`.
+  Added "Release Management Workflow" section to `copilot-instructions.md`.
+
+- **`pytest` test suite** — regression protection and upstream schema validation.
+  - `tests/test_normalizers.py` — offline unit tests for `normalise_activity`,
+    `normalise_daily_stats`, `normalise_sleep`, `normalise_lap`, and `utils.py`
+    helpers (`pick`, `safe_float`, `safe_int`, `iso_week_label`,
+    `week_start_from_label`). Covers edge cases: empty rows, zero-value zones,
+    sentinel rows, camelCase/snake_case field variants, unit conversions.
+  - `tests/test_live_schema.py` — live InfluxDB schema assertions. Verifies
+    mandatory measurements exist and critical fields haven't been renamed.
+    Auto-skipped when no DB connection is available.
+  - `tests/conftest.py` — shared fixtures and `sys.path` setup.
+  - Added `pytest>=8.0.0` and `pytest-asyncio>=0.23.0` to `requirements.txt`.
+  - Added "Testing Requirements" section to `copilot-instructions.md`.
+  - **CI:** GitHub Actions workflow (`.github/workflows/python-tests.yml`) runs
+    offline unit tests on every PR targeting `development`.
+
+- **`explore_schema_tool`** — new MCP tool for runtime InfluxDB schema
+  introspection. Call with no arguments to list all measurements; call with a
+  measurement name to get exact field names, types, and tag keys.  AI agents
+  should use this tool to verify field names before building queries.
+  - New query functions in `influx.py`: `query_field_keys()`, `query_tag_keys()`
+    (InfluxQL v1 and Flux v2 support).
+  - New tool module: `tools/schema.py`.
+
+### Changed
+
+- **Branch model now uses `development` as the base branch** — feature branches
+  are checked out from `development` and PRs target `development`.  Merges into
+  `main` only happen for batch releases (triggering the Docker image build).
+  Updated `copilot-instructions.md` accordingly.
 
 ### Fixed
 

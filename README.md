@@ -339,6 +339,32 @@ HR zone distribution and polarization analysis (low/moderate/high intensity brea
 | `days` | int | `30` | 7–180 |
 | `sport_type` | str | `"all"` | `"running"`, `"cycling"`, `"swimming"`, `"all"` |
 
+### `explore_schema`
+
+Discover available InfluxDB measurements, fields, and tags at runtime. Useful for verifying field names before querying or debugging measurement mismatches.
+
+| Parameter | Type | Optional | Description |
+|---|---|---|---|
+| `measurement_name` | str | Yes | Inspect a specific measurement (e.g. `"ActivitySummary"`). Omit to list all measurements. |
+
+**Returns (no measurement specified):**
+```json
+{"measurements": ["ActivitySummary", "DailyStats", "SleepSummary", "..."]}
+```
+
+**Returns (measurement specified):**
+```json
+{
+  "measurement": "ActivitySummary",
+  "fields": [
+    {"field": "distance", "type": "float"},
+    {"field": "elapsedDuration", "type": "integer"},
+    "..."
+  ],
+  "tags": ["userId", "deviceId", "..."]
+}
+```
+
 ---
 
 ## Example prompts

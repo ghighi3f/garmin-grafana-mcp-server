@@ -1,7 +1,7 @@
 """
 Garmin MCP Server — data access layer for garmin-grafana InfluxDB.
 
-Exposes seven MCP tools over HTTP (streamable-HTTP transport):
+Exposes eight MCP tools over HTTP (streamable-HTTP transport):
   • get_last_activity
   • get_recent_activities
   • get_weekly_load_summary
@@ -9,6 +9,7 @@ Exposes seven MCP tools over HTTP (streamable-HTTP transport):
   • get_activity_details
   • get_fitness_trend
   • get_training_zones
+  • explore_schema
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -45,6 +46,7 @@ from tools.load import get_weekly_load_summary  # noqa: E402
 from tools.recovery import get_daily_recovery  # noqa: E402
 from tools.detail import get_activity_details  # noqa: E402
 from tools.fitness import get_fitness_trend, get_training_zones  # noqa: E402
+from tools.schema import explore_schema  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -261,6 +263,39 @@ async def get_training_zones_tool(days: int = 30, sport_type: str = "all") -> di
         Per-sport zone percentages (only when multiple sports present).
     """
     return await get_training_zones(days=days, sport_type=sport_type)
+
+
+@mcp.tool()
+async def explore_schema_tool(measurement_name: str | None = None) -> dict:
+    """
+    Explore the InfluxDB schema to discover available measurements, fields,
+    and tags.  AI agents should call this tool BEFORE attempting to build
+    queries or reference field names (e.g. to verify whether the elevation
+    field is called "totalAscent", "elevationGain", or something else).
+
+    Usage
+    -----
+    1. Call with no arguments to list every measurement (table) in the
+       database (e.g. ActivitySummary, DailyStats, SleepSummary, ...).
+    2. Call with a measurement_name (e.g. "ActivitySummary") to get the
+       exact field names and their data types, plus any tag keys.
+
+    Parameters
+    ----------
+    measurement_name : str, optional
+        The measurement to inspect.  Omit to list all measurements.
+
+    Returns
+    -------
+    measurements : list[str]
+        (when measurement_name is omitted) All measurement names in the DB.
+    fields : list[dict]
+        (when measurement_name is given) Each entry has "field" (name) and
+        "type" (e.g. "float", "integer", "string").
+    tags : list[str]
+        (when measurement_name is given) Tag key names.
+    """
+    return await explore_schema(measurement_name=measurement_name)
 
 
 # ---------------------------------------------------------------------------

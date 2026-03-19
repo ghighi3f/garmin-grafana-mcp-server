@@ -181,9 +181,11 @@ When it's time to cut a release:
 1. Ensure all feature PRs are merged into `development`.
 2. Move entries from `## [Unreleased]` in `CHANGELOG.md` into a new
    `## [X.Y.Z] - YYYY-MM-DD` section. Push a PR from `development` → `main`.
-3. After the release PR is merged to `main`, pull `main` locally, run
-    `git tag vX.Y.Z`, and `git push origin vX.Y.Z` to trigger the automated
-    GitHub Release and versioned Docker build.
+3. After the release PR is merged to `main`, the repository now automatically
+   tags the merge if the PR branch name started with `release/v` (e.g.
+   `release/v1.2.3`). You do not need to run `git tag` locally anymore—merging
+   a `release/v*` branch into `main` will create the `v*` tag and trigger the
+   automated GitHub Release and Docker build.
 
 The `docker-publish.yml` workflow handles the rest automatically:
 - **Push to `main`** → no longer triggers an image build; repository changes

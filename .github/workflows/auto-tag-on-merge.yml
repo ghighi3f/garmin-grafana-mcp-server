@@ -1,0 +1,43 @@
+name: Auto Tag on Release Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+jobs:
+  tag-release:
+    if: ${{ github.event.pull_request.merged && startsWith(github.event.pull_request.head.ref, 'release/v') }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Extract version from branch name
+        id: ver
+        run: |
+          echo "BRANCH=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
+          VERSION=${{ github.event.pull_request.head.ref#release/v }}
+          # Fallback: remove the prefix using shell
+          VERSION=${{ github.event.pull_request.head.ref }}
+          VERSION=${VERSION#release/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Create tag via GitHub API
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const version = core.getInput('version') || process.env.VERSION || '${{ steps.ver.outputs.version }}'
+            const sha = context.payload.pull_request.merge_commit_sha || context.payload.pull_request.head.sha
+            if (!version) throw new Error('Version not found')
+            const ref = `refs/tags/v${version}`
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: ref,
+              sha: sha,
+            })
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}

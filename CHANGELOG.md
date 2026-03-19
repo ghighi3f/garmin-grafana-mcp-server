@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Automated GitHub Releases** — `docker-publish.yml` now triggers on `v*.*.*`
+  tag pushes in addition to `main` branch pushes. Tag pushes build versioned
+  Docker images (e.g. `:1.2.0`, `:1.2`) and create a GitHub Release with
+  auto-generated release notes via `softprops/action-gh-release@v2`.
+  Added "Release Management Workflow" section to `copilot-instructions.md`.
+
 - **`pytest` test suite** — regression protection and upstream schema validation.
   - `tests/test_normalizers.py` — offline unit tests for `normalise_activity`,
     `normalise_daily_stats`, `normalise_sleep`, `normalise_lap`, and `utils.py`

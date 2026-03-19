@@ -87,7 +87,7 @@ These rules are mandatory for the agent to follow whenever the user requests a c
           `git checkout -b feature/add-hr-zones development`, or
        - ask the user for the preferred branch name before creating it if the agent cannot run terminal commands itself.
     - Pull Requests should target `development`, NOT `main`.
-    - We only merge `development` into `main` when doing a batch release (this triggers the Docker image build on GHCR).
+   - We only merge `development` into `main` when doing a batch release (note: merging to `main` no longer triggers an image build; the build runs only when a `v*.*.*` tag is pushed).
     - Branch names should be hyphen-separated and descriptive: `type/short-description` (examples: `feat/add-training-zones`, `fix/hvr-query`).
 
 2. Changelog Updates:
@@ -182,11 +182,12 @@ When it's time to cut a release:
 2. Move entries from `## [Unreleased]` in `CHANGELOG.md` into a new
    `## [X.Y.Z] - YYYY-MM-DD` section. Push a PR from `development` → `main`.
 3. After the release PR is merged to `main`, pull `main` locally, run
-   `git tag vX.Y.Z`, and `git push origin vX.Y.Z` to trigger the automated
-   GitHub Release and versioned Docker build.
+    `git tag vX.Y.Z`, and `git push origin vX.Y.Z` to trigger the automated
+    GitHub Release and versioned Docker build.
 
 The `docker-publish.yml` workflow handles the rest automatically:
-- **Push to `main`** → builds and pushes the `latest` Docker tag.
+- **Push to `main`** → no longer triggers an image build; repository changes
+   can be merged to `main` for release visibility but image builds happen on tags.
 - **Push of `v*.*.*` tag** → builds and pushes versioned Docker tags
-  (e.g. `1.2.0`, `1.2`) and creates a GitHub Release with auto-generated
-  release notes.
+   (e.g. `1.2.0`, `1.2`) and also applies the `latest` tag; a GitHub Release
+   with auto-generated release notes is created when a `v*.*.*` tag is pushed.

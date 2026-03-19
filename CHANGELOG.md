@@ -9,6 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`pytest` test suite** — regression protection and upstream schema validation.
+  - `tests/test_normalizers.py` — offline unit tests for `normalise_activity`,
+    `normalise_daily_stats`, `normalise_sleep`, `normalise_lap`, and `utils.py`
+    helpers (`pick`, `safe_float`, `safe_int`, `iso_week_label`,
+    `week_start_from_label`). Covers edge cases: empty rows, zero-value zones,
+    sentinel rows, camelCase/snake_case field variants, unit conversions.
+  - `tests/test_live_schema.py` — live InfluxDB schema assertions. Verifies
+    mandatory measurements exist and critical fields haven't been renamed.
+    Auto-skipped when no DB connection is available.
+  - `tests/conftest.py` — shared fixtures and `sys.path` setup.
+  - Added `pytest>=8.0.0` and `pytest-asyncio>=0.23.0` to `requirements.txt`.
+  - Added "Testing Requirements" section to `copilot-instructions.md`.
+  - **CI:** GitHub Actions workflow (`.github/workflows/python-tests.yml`) runs
+    offline unit tests on every PR targeting `development`.
+
 - **`explore_schema_tool`** — new MCP tool for runtime InfluxDB schema
   introspection. Call with no arguments to list all measurements; call with a
   measurement name to get exact field names, types, and tag keys.  AI agents

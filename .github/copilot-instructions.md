@@ -125,6 +125,46 @@ Enforcement:
 5. Always clamp input parameters and handle `ConnectionError`.
 6. Add the tool to the docstring at the top of `server.py`.
 
+## Testing Requirements
+
+This project uses **pytest** for automated testing. All tests must pass before
+opening a Pull Request against the `development` branch.
+
+### Test structure
+
+```
+tests/
+├── conftest.py              # sys.path setup so imports work
+├── test_normalizers.py      # Offline unit tests for normalizer functions + utils
+└── test_live_schema.py      # Live InfluxDB schema validation (skipped if no DB)
+```
+
+### Running tests
+
+```bash
+# Unit tests only (offline, no DB needed):
+pytest tests/test_normalizers.py -v
+
+# Live schema validation (requires InfluxDB + .env):
+pytest tests/test_live_schema.py -v
+
+# Full suite:
+pytest -v
+```
+
+### Rules for the agent
+
+1. **Before creating a PR** against `development`, run `pytest -v` and confirm all
+   tests pass. If live schema tests are skipped (no DB), that is acceptable, but
+   unit tests must pass with zero failures.
+2. **When modifying normalizers** (`normalise_activity`, `normalise_daily_stats`,
+   `normalise_sleep`, `normalise_lap` in `influx.py`), add or update the
+   corresponding tests in `tests/test_normalizers.py`.
+3. **When adding a new measurement or field dependency**, add a schema assertion
+   to `tests/test_live_schema.py` so upstream renames are caught early.
+4. Tests must be runnable **offline** (unit tests) — never import the InfluxDB
+   client at module level in unit test files.
+
 ## Testing locally
 
 ```bash

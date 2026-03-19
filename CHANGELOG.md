@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`explore_schema_tool`** — new MCP tool for runtime InfluxDB schema
+  introspection. Call with no arguments to list all measurements; call with a
+  measurement name to get exact field names, types, and tag keys.  AI agents
+  should use this tool to verify field names before building queries.
+  - New query functions in `influx.py`: `query_field_keys()`, `query_tag_keys()`
+    (InfluxQL v1 and Flux v2 support).
+  - New tool module: `tools/schema.py`.
+
+### Changed
+
+- **Branch model now uses `development` as the base branch** — feature branches
+  are checked out from `development` and PRs target `development`.  Merges into
+  `main` only happen for batch releases (triggering the Docker image build).
+  Updated `copilot-instructions.md` accordingly.
+
 ### Fixed
 
 - **Sentinel "No Activity" rows no longer leak into tool responses** — `query_last_activity()`

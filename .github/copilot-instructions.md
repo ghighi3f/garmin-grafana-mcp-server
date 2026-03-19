@@ -34,6 +34,7 @@ LLM Client  ──HTTP──▶  server.py (FastAPI + FastMCP)
 - `tools/recovery.py` — `get_daily_recovery`.
 - `tools/detail.py` — `get_activity_details`.
 - `tools/fitness.py` — `get_fitness_trend`, `get_training_zones`.
+- `tools/schema.py` — `explore_schema` (AI self-service schema introspection).
 
 ## InfluxDB schema (garmin-grafana)
 
@@ -79,11 +80,14 @@ All field and measurement names are configurable via env vars — see `.env.exam
 These rules are mandatory for the agent to follow whenever the user requests a code change, bugfix, or feature addition. They sit alongside the architectural and InfluxDB schema guidance above and are intended to keep the repository consistent and CI/CD-friendly.
 
 1. Branch Management:
-    - NEVER write code directly on the `main` branch.
-    - Before making edits, the agent MUST check the current git branch. If the working branch is `main`, the agent must either:
-       - create and switch to a new descriptive branch using a command such as:
-          `git checkout -b feature/add-hr-zones`, or
+    - NEVER write code directly on `main` or `development`.
+    - The **base branch** for all new work is `development` (NOT `main`).
+    - Before making edits, the agent MUST check the current git branch. If the working branch is `main` or `development`, the agent must either:
+       - create and switch to a new descriptive branch from `development` using a command such as:
+          `git checkout -b feature/add-hr-zones development`, or
        - ask the user for the preferred branch name before creating it if the agent cannot run terminal commands itself.
+    - Pull Requests should target `development`, NOT `main`.
+    - We only merge `development` into `main` when doing a batch release (this triggers the Docker image build on GHCR).
     - Branch names should be hyphen-separated and descriptive: `type/short-description` (examples: `feat/add-training-zones`, `fix/hvr-query`).
 
 2. Changelog Updates:

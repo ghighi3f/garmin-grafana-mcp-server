@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI:** Prevent double Docker build on release — `.github/workflows/docker-publish.yml`
+  now triggers only on pushed tags `v*.*.*` (and `workflow_dispatch`), and
+  `docker/metadata-action` now applies both the semantic version tag and
+  the `latest` tag when a `v*.*.*` tag is pushed. Updated
+  `copilot-instructions.md` Release Management Workflow to clarify the change.
+
+
 ### Added
 
 - **Automated GitHub Releases** — `docker-publish.yml` now triggers on `v*.*.*`

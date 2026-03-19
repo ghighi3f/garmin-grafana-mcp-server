@@ -13,28 +13,21 @@ ATL/CTL/TSB. The LLM is responsible for analysis.
 
 ## Architecture
 
-```
-LLM Client  ──HTTP──▶  server.py (FastAPI + FastMCP)
-                            │
-                            ▼
-                        influx.py (all queries)
-                            │
-                            ▼
-                      InfluxDB (v1 or v2)
-                    populated by garmin-grafana
+```text
+LLM Client  ──HTTP/SSE──▶  server.py (FastAPI + FastMCP)
+                               │
+                               ▼
+                           influx.py (all queries)
+                               │
+                               ▼
+                         InfluxDB (v1 or v2)
+                       populated by garmin-grafana
 ```
 
 - `server.py` — FastAPI app, MCP tool registration, `/health`, startup banner.
-- `influx.py` — All InfluxDB connection logic and queries. **Only** file that
-  touches the database.
-- `utils.py` — Shared helpers: `pick()`, `safe_float()`, `safe_int()`,
-  `iso_week_label()`, `week_start_from_label()`.
-- `tools/activity.py` — `get_last_activity`, `get_recent_activities`.
-- `tools/load.py` — `get_weekly_load_summary`.
-- `tools/recovery.py` — `get_daily_recovery`.
-- `tools/detail.py` — `get_activity_details`.
-- `tools/fitness.py` — `get_fitness_trend`, `get_training_zones`.
-- `tools/schema.py` — `explore_schema` (AI self-service schema introspection).
+- `influx.py` — All InfluxDB connection logic and queries. **Only** file that touches the database.
+- `utils.py` — Shared helpers: `pick()`, `safe_float()`, `safe_int()`, `iso_week_label()`, `week_start_from_label()`.
+- `tools/` — Directory containing categorized tools (`activity.py`, `load.py`, `recovery.py`, `detail.py`, `fitness.py`, `schema.py`).
 
 ## InfluxDB schema (garmin-grafana)
 
@@ -55,84 +48,55 @@ LLM Client  ──HTTP──▶  server.py (FastAPI + FastMCP)
 
 ### Key field-name conventions
 
-garmin-grafana uses camelCase field names (e.g. `averageHR`, `sleepScore`,
-`bodyBatteryAtWakeTime`). The normalizers in `influx.py` handle multiple
-naming variants for robustness.
-
-All field and measurement names are configurable via env vars — see `.env.example`.
+garmin-grafana uses camelCase field names (e.g. `averageHR`, `sleepScore`, `bodyBatteryAtWakeTime`). The normalizers in `influx.py` handle multiple naming variants for robustness. All field and measurement names are configurable via env vars — see `.env.example`.
 
 ## Code conventions
 
 1. **All queries live in `influx.py`** — tools never construct raw InfluxQL/Flux.
-2. **Shared helpers live in `utils.py`** — `pick()`, `safe_float()`, `safe_int()`,
-   `iso_week_label()`, `week_start_from_label()`.
-3. **Normalizers** (`normalise_activity`, `normalise_daily_stats`, etc.) handle
-   field-name variations and unit conversions. Missing fields become `None`.
-4. **Environmental configuration** — every measurement name, field name, and
-   connection parameter is read from environment variables with sensible defaults.
+2. **Shared helpers live in `utils.py`**.
+3. **Normalizers** handle field-name variations and unit conversions. Missing fields become `None`.
+4. **Environmental configuration** — read from environment variables with sensible defaults.
 5. **Input clamping** — every tool clamps its parameters to documented ranges.
-6. **Error handling** — `ConnectionError` from InfluxDB returns a structured
-   `{"error": ..., "hint": ..., "detail": ...}` dict; never raises to the LLM.
-7. **No planning logic** — tools return raw data only. The LLM decides what it means.
+6. **Error handling** — `ConnectionError` from InfluxDB returns a structured dict; never raises to the LLM.
+7. **No planning logic** — tools return raw data only.
 
 ## Git & Workflow Rules
 
-These rules are mandatory for the agent to follow whenever the user requests a code change, bugfix, or feature addition. They sit alongside the architectural and InfluxDB schema guidance above and are intended to keep the repository consistent and CI/CD-friendly.
+These rules are mandatory for the agent to follow to keep the repository consistent and CI/CD-friendly.
 
-1. Branch Management:
+1. **Branch Management:**
     - NEVER write code directly on `main` or `development`.
     - The **base branch** for all new work is `development` (NOT `main`).
-    - Before making edits, the agent MUST check the current git branch. If the working branch is `main` or `development`, the agent must either:
-       - create and switch to a new descriptive branch from `development` using a command such as:
-          `git checkout -b feature/add-hr-zones development`, or
-       - ask the user for the preferred branch name before creating it if the agent cannot run terminal commands itself.
-    - Pull Requests should target `development`, NOT `main`.
-   - We only merge `development` into `main` when doing a batch release (note: merging to `main` no longer triggers an image build; the build runs only when a `v*.*.*` tag is pushed).
-    - Branch names should be hyphen-separated and descriptive: `type/short-description` (examples: `feat/add-training-zones`, `fix/hvr-query`).
+    - Create and switch to a descriptive branch from `development` (e.g., `git checkout -b feature/add-hr-zones development`).
+    - Pull Requests should target `development`.
 
-2. Changelog Updates:
-    - Any time a feature is added, modified, or fixed, the agent MUST update `CHANGELOG.md`.
-    - Follow the "Keep a Changelog" format. Place new entries under the `## [Unreleased]` section and include a concise, one-line headline and optionally a short bullet list describing the change.
-    - Example entry:
-       - `### Added`
-          - `- Add HR zone percentages to normalise_activity()` — returns zone_N_pct for zones 1–5.`
-    - The agent must include the changelog edit in the same commit as the code change (or in the same branch before creating the PR).
+2. **Changelog Updates:**
+    - Any time a feature is added, modified, or fixed, the agent MUST update `CHANGELOG.md` under the `## [Unreleased]` section.
+    - Example: `- Add HR zone percentages to normalise_activity()`
 
-3. Commit & Pull Request Prep:
-    - After implementing changes and updating `CHANGELOG.md`, the agent MUST propose a clear, standardized commit message and remind the user to push the branch to trigger CI/CD.
-    - Commit message format examples:
-       - `feat(<scope>): short description` — for new features
-       - `fix(<scope>): short description` — for bug fixes
-       - `docs: update copilot-instructions.md (Git & Workflow Rules)` — for documentation-only edits
-    - The agent should include the changelog, tests (if applicable), and any relevant notes in the commit.
-    - The agent MUST not merge directly into `main`. Instead, push the branch and create a pull request with a descriptive title and body listing:
-       - What changed (files and high-level summary)
-       - How to test or verify locally
-       - Any rollout or CI considerations
+3. **Commit & Pull Request Prep:**
+    - Propose a standardized commit message: `feat(<scope>): short description` or `fix(<scope>): short description`.
+    - Do not merge directly into `main`. Push the branch and create a PR.
 
-Enforcement:
-- If the agent cannot run git commands in the environment, it must present the exact commands to the user and clearly explain the required steps to create the branch, commit, push, and open a PR.
-- The agent must always include the `CHANGELOG.md` update and the proposed commit message in its response when returning code changes.
+## ⚠️ When adding a new tool (The Definition of Done)
 
+When tasked with creating a new MCP tool, the agent MUST complete all of the following steps:
 
-## When adding a new tool
-
-1. Add the query function to `influx.py` (with both v1 and v2 variants).
-2. Create or extend a file in `tools/` with the business logic.
-3. Register the `@mcp.tool()` wrapper in `server.py` with full docstring
-   (Parameters + Returns sections — the LLM reads these as tool descriptions).
-4. Use shared helpers from `utils.py` for field extraction and type coercion.
-5. Always clamp input parameters and handle `ConnectionError`.
-6. Add the tool to the docstring at the top of `server.py`.
+1. **Backend:** Add the query function to `influx.py` (with both v1 and v2 variants).
+2. **Business Logic:** Create or extend a file in `tools/`. Use helpers from `utils.py`.
+3. **MCP Registration:** Register the `@mcp.tool()` wrapper in `server.py`.
+   - **Crucial:** Write a full docstring (Parameters + Returns). The LLM reads this to know how to use the tool.
+   - **Crucial:** Use broad default arguments (e.g., `days=14`, `sport_type="all"`) to prevent LLM clients from accidentally querying too narrow a window and missing data.
+4. **Testing:** Add or update tests in `tests/test_normalizers.py`. Run `pytest -v` inside the local Docker container to ensure no regressions.
+5. **Documentation:** Update `README.md` to add the new tool to the "Available Tools" section. Add the tool to the docstring at the top of `server.py`.
 
 ## Testing Requirements
 
-This project uses **pytest** for automated testing. All tests must pass before
-opening a Pull Request against the `development` branch.
+This project uses **pytest** for automated testing. All tests must pass before opening a Pull Request against the `development` branch.
 
 ### Test structure
 
-```
+```text
 tests/
 ├── conftest.py              # sys.path setup so imports work
 ├── test_normalizers.py      # Offline unit tests for normalizer functions + utils
@@ -141,55 +105,43 @@ tests/
 
 ### Running tests
 
+Run tests **inside the local Docker container**, not on the host machine. This project already has a Docker-based local workflow, and using the container keeps the Python environment and dependencies consistent with the app runtime.
+
 ```bash
-# Unit tests only (offline, no DB needed):
-pytest tests/test_normalizers.py -v
+# Start the local dev container if needed
+docker compose up -d
 
-# Live schema validation (requires InfluxDB + .env):
-pytest tests/test_live_schema.py -v
+# Unit tests only (offline, no DB needed)
+docker compose exec garmin-grafana-mcp-server pytest tests/test_normalizers.py -v
 
-# Full suite:
-pytest -v
+# Live schema validation (requires InfluxDB + .env)
+docker compose exec garmin-grafana-mcp-server pytest tests/test_live_schema.py -v
+
+# Full suite
+docker compose exec garmin-grafana-mcp-server pytest -v
 ```
 
 ### Rules for the agent
 
-1. **Before creating a PR** against `development`, run `pytest -v` and confirm all
-   tests pass. If live schema tests are skipped (no DB), that is acceptable, but
-   unit tests must pass with zero failures.
-2. **When modifying normalizers** (`normalise_activity`, `normalise_daily_stats`,
-   `normalise_sleep`, `normalise_lap` in `influx.py`), add or update the
-   corresponding tests in `tests/test_normalizers.py`.
-3. **When adding a new measurement or field dependency**, add a schema assertion
-   to `tests/test_live_schema.py` so upstream renames are caught early.
-4. Tests must be runnable **offline** (unit tests) — never import the InfluxDB
-   client at module level in unit test files.
+1. **Before creating a PR** against `development`, run `pytest -v` **inside the local container**, not on the host. Unit tests must pass with zero failures. Live schema tests may be skipped if no DB is available.
+2. **When modifying normalizers** (`normalise_activity`, `normalise_daily_stats`, `normalise_sleep`, `normalise_lap` in `influx.py`), add or update the corresponding tests in `tests/test_normalizers.py`.
+3. **When adding a new measurement or field dependency**, add a schema assertion to `tests/test_live_schema.py` so upstream renames are caught early.
+4. Tests should be run from the app container because it is the preferred local development environment for this repo. Do not default to host-side `pytest` unless the user explicitly asks for that.
+5. The agent must report the exact container test command it used when returning code changes.
 
 ## Testing locally
 
 ```bash
-cp .env.example .env   # edit INFLUXDB_HOST to localhost
-python server.py        # → http://localhost:8765/mcp
+cp .env.example .env
+docker compose up -d
+docker compose exec garmin-grafana-mcp-server pytest -v
 ```
 
-For Docker: `docker compose up -d` (requires `garmin-grafana_default` network).
+For containerized development, prefer running commands inside `garmin-grafana-mcp-server` rather than on the host.
 
 ## Release Management Workflow
 
-When it's time to cut a release:
-
 1. Ensure all feature PRs are merged into `development`.
-2. Move entries from `## [Unreleased]` in `CHANGELOG.md` into a new
-   `## [X.Y.Z] - YYYY-MM-DD` section. Push a PR from `development` → `main`.
-3. After the release PR is merged to `main`, the repository now automatically
-   tags the merge if the PR branch name started with `release/v` (e.g.
-   `release/v1.2.3`). You do not need to run `git tag` locally anymore—merging
-   a `release/v*` branch into `main` will create the `v*` tag and trigger the
-   automated GitHub Release and Docker build.
-
-The `docker-publish.yml` workflow handles the rest automatically:
-- **Push to `main`** → no longer triggers an image build; repository changes
-   can be merged to `main` for release visibility but image builds happen on tags.
-- **Push of `v*.*.*` tag** → builds and pushes versioned Docker tags
-   (e.g. `1.2.0`, `1.2`) and also applies the `latest` tag; a GitHub Release
-   with auto-generated release notes is created when a `v*.*.*` tag is pushed.
+2. Move entries from `## [Unreleased]` in `CHANGELOG.md` into a new `## [X.Y.Z] - YYYY-MM-DD` section.
+3. Push a PR from `development` → `main` named `release/vX.Y.Z`.
+4. Merging the `release/v*` branch automatically tags the release and triggers the Docker build to `ghcr.io` via GitHub Actions.

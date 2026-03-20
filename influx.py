@@ -4,6 +4,7 @@ All InfluxQL / Flux queries live here — never inline in tools.
 """
 
 import os
+import re
 import logging
 import threading
 import atexit
@@ -69,6 +70,14 @@ FIELD_HR_ZONE_3 = os.getenv("FIELD_HR_ZONE_3", "hrTimeInZone_3")
 FIELD_HR_ZONE_4 = os.getenv("FIELD_HR_ZONE_4", "hrTimeInZone_4")
 FIELD_HR_ZONE_5 = os.getenv("FIELD_HR_ZONE_5", "hrTimeInZone_5")
 
+# Sports that use pace (min/km) instead of speed (km/h)
+PACE_SPORTS: frozenset[str] = frozenset({
+    "running", "run",
+    "swimming", "swim",
+    "walk", "hiking",
+    "trail_running", "trail running",
+})
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
@@ -125,6 +134,22 @@ def get_client():
     return _v1_client()
 
 
+def sanitize_sport_type(sport_type: str | None) -> str | None:
+    """
+    Sanitize a user-provided sport_type for safe interpolation into
+    InfluxQL / Flux queries.
+
+    Returns None if the value is None, empty, or "all".
+    Raises ValueError for characters that could enable query injection.
+    """
+    if sport_type is None or sport_type.strip() == "" or sport_type.strip().lower() == "all":
+        return None
+    cleaned = sport_type.strip().lower()
+    if not re.match(r'^[a-z0-9 _-]+$', cleaned):
+        raise ValueError(f"Invalid sport_type: {sport_type!r}")
+    return cleaned
+
+
 def normalise_activity(row: dict) -> dict:
     """
     Map raw InfluxDB field names (which vary across garmin-grafana versions)
@@ -171,10 +196,10 @@ def normalise_activity(row: dict) -> dict:
         round(avg_speed_raw, 2) if avg_speed_raw else None
     )
 
-    # Pace (min/km) for run/swim; speed (km/h) for cycling/row
+    # Pace (min/km) for run/swim/walk/hike; speed (km/h) for cycling/row/etc.
     if avg_speed_kmh and avg_speed_kmh > 0:
-        avg_pace = round(60.0 / avg_speed_kmh, 2) if sport in ("running", "run", "swimming", "swim", "walk", "hiking") else None
-        avg_speed_out = avg_speed_kmh if sport not in ("running", "run", "swimming", "swim") else None
+        avg_pace = round(60.0 / avg_speed_kmh, 2) if sport in PACE_SPORTS else None
+        avg_speed_out = avg_speed_kmh if sport not in PACE_SPORTS else None
     else:
         avg_pace = None
         avg_speed_out = None
@@ -318,8 +343,7 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
         round(max_speed_raw, 2) if max_speed_raw else None
     )
 
-    pace_sports = ("running", "run", "swimming", "swim", "walk", "hiking")
-    avg_pace = round(60.0 / avg_speed_kmh, 2) if avg_speed_kmh and avg_speed_kmh > 0 and sport in pace_sports else None
+    avg_pace = round(60.0 / avg_speed_kmh, 2) if avg_speed_kmh and avg_speed_kmh > 0 and sport in PACE_SPORTS else None
 
     return {
         "index": index,
@@ -327,8 +351,8 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
         "elapsed_time_minutes": elapsed_min,
         "avg_hr": safe_float(pick(row, "Avg_HR", "avg_hr")),
         "max_hr": safe_float(pick(row, "Max_HR", "max_hr")),
-        "avg_speed_kmh": avg_speed_kmh if sport not in pace_sports else None,
-        "max_speed_kmh": max_speed_kmh if sport not in pace_sports else None,
+        "avg_speed_kmh": avg_speed_kmh if sport not in PACE_SPORTS else None,
+        "max_speed_kmh": max_speed_kmh if sport not in PACE_SPORTS else None,
         "avg_pace_min_per_km": avg_pace,
         "calories": safe_int(pick(row, "Calories", "calories")),
         "avg_cadence": safe_float(pick(row, "Avg_Cadence", "avg_cadence")),
@@ -454,13 +478,20 @@ def query_recent_activities(days: int, sport_type: str | None, limit: int) -> li
     Return activity rows for the last `days` days, optionally filtered
     by sport_type, newest-first, capped at `limit`.
     """
+    try:
+        sport_type = sanitize_sport_type(sport_type)
+    except ValueError:
+        sport_type = None  # invalid input → no filter
+
     raw_rows: list[dict] = []
 
     if INFLUXDB_VERSION == 2:
         sport_filter = ""
-        if sport_type and sport_type != "all":
+        if sport_type:
             sport_filter = (
-                f'|> filter(fn: (r) => r["sport_type"] == "{sport_type}" or r["sport"] == "{sport_type}")'
+                f'|> filter(fn: (r) => r["sport_type"] =~ /.*{sport_type}.*/i'
+                f' or r["sport"] =~ /.*{sport_type}.*/i'
+                f' or r["activityType"] =~ /.*{sport_type}.*/i)'
             )
         q = f'''
         from(bucket: "{INFLUXDB_DATABASE}")
@@ -477,10 +508,13 @@ def query_recent_activities(days: int, sport_type: str | None, limit: int) -> li
             raise ConnectionError(str(exc)) from exc
     else:
         sport_clause = ""
-        if sport_type and sport_type != "all":
-            # match both tag and field variants
+        if sport_type:
+            # Regex match: catches sub-sports (e.g. "cycling" matches
+            # "road_biking" won't, but "cycling" matches "indoor_cycling").
             sport_clause = (
-                f" AND (\"sport_type\" = '{sport_type}' OR \"sport\" = '{sport_type}')"
+                f" AND (\"sport_type\" =~ /.*{sport_type}.*/"
+                f" OR \"sport\" =~ /.*{sport_type}.*/"
+                f" OR \"activityType\" =~ /.*{sport_type}.*/)"
             )
         q = (
             f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '

@@ -13,6 +13,8 @@ from influx import (
     normalise_daily_stats,
     normalise_sleep,
     normalise_lap,
+    PACE_SPORTS,
+    sanitize_sport_type,
 )
 from utils import pick, safe_float, safe_int, iso_week_label, week_start_from_label
 from tools.stress import (
@@ -586,3 +588,101 @@ class TestSynthesizeTodayRow:
         assert result["stress_high_min"] == 3.0
         assert result["body_battery_high"] == 90
         assert result["body_battery_at_wake"] is None
+
+
+# ===================================================================
+# PACE_SPORTS constant
+# ===================================================================
+
+class TestPaceSports:
+    """Tests for the PACE_SPORTS constant and its integration."""
+
+    def test_known_pace_sports(self):
+        for sport in ("running", "run", "swimming", "swim", "walk",
+                      "hiking", "trail_running", "trail running"):
+            assert sport in PACE_SPORTS, f"{sport} should be in PACE_SPORTS"
+
+    def test_known_speed_sports(self):
+        for sport in ("cycling", "rowing", "kayaking"):
+            assert sport not in PACE_SPORTS, f"{sport} should NOT be in PACE_SPORTS"
+
+    def test_walk_gets_pace_not_speed(self):
+        """Regression: walk previously got both pace AND speed."""
+        row = {"activityType": "Walk", "averageSpeed": 1.39}  # ~5 km/h
+        result = normalise_activity(row)
+        assert result["avg_pace_min_per_km"] is not None
+        assert result["avg_speed_kmh"] is None
+
+    def test_hiking_gets_pace_not_speed(self):
+        """Regression: hiking previously got both pace AND speed."""
+        row = {"activityType": "Hiking", "averageSpeed": 1.11}  # ~4 km/h
+        result = normalise_activity(row)
+        assert result["avg_pace_min_per_km"] is not None
+        assert result["avg_speed_kmh"] is None
+
+    def test_trail_running_gets_pace(self):
+        row = {"activityType": "Trail_Running", "averageSpeed": 2.78}  # ~10 km/h
+        result = normalise_activity(row)
+        assert result["avg_pace_min_per_km"] is not None
+        assert result["avg_speed_kmh"] is None
+
+    def test_cycling_gets_speed_not_pace(self):
+        row = {"activityType": "Cycling", "averageSpeed": 8.33}  # ~30 km/h
+        result = normalise_activity(row)
+        assert result["avg_speed_kmh"] is not None
+        assert result["avg_pace_min_per_km"] is None
+
+    def test_lap_walk_gets_pace_not_speed(self):
+        row = {"Index": 1, "Avg_Speed": 1.39, "Distance": 1000.0, "Elapsed_Time": 720.0}
+        result = normalise_lap(row, sport="walk")
+        assert result["avg_pace_min_per_km"] is not None
+        assert result["avg_speed_kmh"] is None
+
+    def test_lap_cycling_gets_speed_not_pace(self):
+        row = {"Index": 1, "Avg_Speed": 8.33, "Distance": 5000.0, "Elapsed_Time": 600.0}
+        result = normalise_lap(row, sport="cycling")
+        assert result["avg_speed_kmh"] is not None
+        assert result["avg_pace_min_per_km"] is None
+
+
+# ===================================================================
+# sanitize_sport_type
+# ===================================================================
+
+class TestSanitizeSportType:
+    """Tests for the sanitize_sport_type() query safety function."""
+
+    def test_none_returns_none(self):
+        assert sanitize_sport_type(None) is None
+
+    def test_empty_returns_none(self):
+        assert sanitize_sport_type("") is None
+        assert sanitize_sport_type("   ") is None
+
+    def test_all_returns_none(self):
+        assert sanitize_sport_type("all") is None
+        assert sanitize_sport_type("ALL") is None
+        assert sanitize_sport_type("  All  ") is None
+
+    def test_valid_sport_passes_through(self):
+        assert sanitize_sport_type("running") == "running"
+        assert sanitize_sport_type("Trail_Running") == "trail_running"
+        assert sanitize_sport_type("  Cycling  ") == "cycling"
+
+    def test_sport_with_space(self):
+        assert sanitize_sport_type("trail running") == "trail running"
+
+    def test_sport_with_hyphen(self):
+        assert sanitize_sport_type("e-bike") == "e-bike"
+
+    def test_injection_attempt_raises(self):
+        with pytest.raises(ValueError):
+            sanitize_sport_type("running'; DROP MEASUREMENT --")
+
+    def test_quotes_rejected(self):
+        with pytest.raises(ValueError):
+            sanitize_sport_type('running"')
+
+    def test_special_chars_rejected(self):
+        with pytest.raises(ValueError):
+            sanitize_sport_type("running|cycling")

@@ -115,8 +115,11 @@ async def get_recent_activities_tool(
     days : int
         Look-back window in days.  Range: 1–90.  Default: 7.
     sport_type : str
-        Filter by sport.  Accepted values: "running", "cycling",
-        "swimming", "all".  Default: "all".
+        Filter by sport.  Any valid Garmin sport type string
+        (e.g. "running", "cycling", "swimming", "hiking",
+        "trail_running", "strength_training").  Supports partial
+        matching for sub-sports (e.g. "cycling" matches
+        "indoor_cycling").  Use "all" for no filter.  Default: "all".
     limit : int
         Maximum number of records returned.  Range: 1–100.  Default: 20.
 
@@ -251,8 +254,10 @@ async def get_training_zones_tool(days: int = 30, sport_type: str = "all") -> di
     days : int
         Look-back window in days.  Range: 7–180.  Default: 30.
     sport_type : str
-        Filter by sport.  Accepted values: "running", "cycling",
-        "swimming", "all".  Default: "all".
+        Filter by sport.  Any valid Garmin sport type string
+        (e.g. "running", "cycling", "swimming", "hiking",
+        "trail_running").  Supports partial matching for sub-sports.
+        Use "all" for no filter.  Default: "all".
 
     Returns
     -------

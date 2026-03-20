@@ -7,6 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Expanded sport type support** — `get_recent_activities` and
+  `get_training_zones` now accept any Garmin sport type string (e.g.
+  "hiking", "trail_running", "strength_training"), not just the
+  previously hardcoded set of "running", "cycling", and "swimming".
+  The special value "all" still means "no filter".
+  - Removed hardcoded validation gates in `tools/activity.py` and
+    `tools/fitness.py`.
+  - Centralised pace-vs-speed sport set as `PACE_SPORTS` constant in
+    `influx.py`, used by both `normalise_activity()` and `normalise_lap()`.
+  - Added `trail_running` and `trail running` to the pace sports set.
+  - Updated MCP tool docstrings in `server.py` to document arbitrary
+    sport type support.
+
+- **Regex-based sport filtering** — InfluxQL and Flux queries now use
+  regex matching (`=~ /.*{sport_type}.*/`) instead of strict equality
+  for sport_type filtering. This catches sub-sports automatically (e.g.
+  filtering by "cycling" also matches "indoor_cycling", "road_biking").
+  Post-fetch filtering in `tools/fitness.py` uses substring matching
+  for consistency.
+
+### Fixed
+
+- **Walk and hiking activities now correctly suppress speed** —
+  `normalise_activity()` had an inconsistency where walk/hiking got
+  pace (min/km) but also kept speed (km/h). Now uses the unified
+  `PACE_SPORTS` constant, matching the existing `normalise_lap()` behavior.
+
+- **`_get_sport()` field priority mismatch** — `tools/fitness.py` used
+  a different field lookup order (`activityType` first) than
+  `normalise_activity()` (`sport_type` first), which could produce
+  different sport type strings for the same row. Now uses `pick()` with
+  the same priority order.
+
+- **Sport type query injection prevention** — added `sanitize_sport_type()`
+  in `influx.py` that validates user-provided sport strings before
+  interpolation into InfluxQL/Flux queries. Only alphanumeric characters,
+  spaces, underscores, and hyphens are allowed.
+
+- **CI:** Fixed version extraction in `.github/workflows/auto-tag-on-merge.yml`
+  — the workflow used `${{ }}` expression syntax for bash parameter
+  expansion (`#prefix`), which is not valid in GitHub Actions expressions.
+  Now correctly assigns to a bash variable first and uses `${BRANCH#release/v}`.
+
 ### Added
 
 - **`get_stress_body_battery_tool`** — new MCP tool for daily stress breakdown

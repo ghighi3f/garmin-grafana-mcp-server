@@ -56,7 +56,9 @@ async def get_recent_activities(
 
     Parameters:
         days       – look-back window in days (1–90, default 7)
-        sport_type – filter: "running", "cycling", "swimming", or "all"
+        sport_type – filter by Garmin sport type (e.g. "running", "cycling",
+                     "swimming", "hiking", "trail_running", "strength_training")
+                     or "all" for no filter.  Supports partial/sub-sport matching.
         limit      – max rows returned (1–100, default 20)
 
     Response includes:
@@ -67,7 +69,9 @@ async def get_recent_activities(
     # Clamp inputs
     days = max(1, min(days, 90))
     limit = max(1, min(limit, 100))
-    if sport_type not in ("running", "cycling", "swimming", "all", None):
+    if sport_type:
+        sport_type = sport_type.strip().lower()
+    if not sport_type:
         sport_type = "all"
 
     try:

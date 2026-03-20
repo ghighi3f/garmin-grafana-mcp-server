@@ -9,7 +9,7 @@ import asyncio
 from typing import Any
 
 import influx
-from utils import safe_float, iso_week_label, week_start_from_label
+from utils import safe_float, pick, iso_week_label, week_start_from_label
 
 
 # ---------------------------------------------------------------------------
@@ -184,7 +184,9 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
 
     Parameters:
         days       – look-back window in days (7–180, default 30)
-        sport_type – filter: "running", "cycling", "swimming", or "all"
+        sport_type – filter by Garmin sport type (e.g. "running", "cycling",
+                     "swimming", "hiking", "trail_running") or "all" for no
+                     filter.  Supports partial/sub-sport matching.
 
     Returns:
         zone_distribution  – total minutes and % per zone
@@ -192,7 +194,9 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
         by_sport           – per-sport zone distribution (when multiple sports)
     """
     days = max(7, min(days, 180))
-    if sport_type not in ("running", "cycling", "swimming", "all", None):
+    if sport_type:
+        sport_type = sport_type.strip().lower()
+    if not sport_type:
         sport_type = "all"
 
     try:
@@ -213,10 +217,10 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
     ]
 
     def _get_sport(row):
-        for k in ("activityType", "activity_type", "sport_type", "sport"):
-            v = row.get(k)
-            if v and str(v).lower().strip() != "no activity":
-                return str(v).lower().strip()
+        """Extract sport type using same field priority as normalise_activity()."""
+        v = pick(row, "sport_type", "sport", "activityType", "activity_type")
+        if v and str(v).lower().strip() != "no activity":
+            return str(v).lower().strip()
         return None
 
     overall = [0.0] * 5
@@ -228,7 +232,7 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
         if row_sport is None:
             continue
 
-        if sport_type and sport_type != "all" and row_sport != sport_type:
+        if sport_type and sport_type != "all" and sport_type not in row_sport:
             continue
 
         zones = []

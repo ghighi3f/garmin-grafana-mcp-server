@@ -5,6 +5,7 @@ Pure data retrieval — no planning logic, no goal assumptions.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import influx
@@ -21,10 +22,10 @@ async def get_last_activity() -> dict[str, Any]:
     Fields returned (null when not recorded or unavailable):
         timestamp, sport_type, distance_km, duration_minutes,
         avg_hr, max_hr, calories, avg_pace_min_per_km, avg_speed_kmh,
-        elevation_gain_m, avg_cadence, normalized_power
+        elevation_gain_m, avg_cadence, avg_power
     """
     try:
-        activity = influx.query_last_activity()
+        activity = await asyncio.to_thread(influx.query_last_activity)
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",
@@ -55,7 +56,9 @@ async def get_recent_activities(
 
     Parameters:
         days       – look-back window in days (1–90, default 7)
-        sport_type – filter: "running", "cycling", "swimming", or "all"
+        sport_type – filter by Garmin sport type (e.g. "running", "cycling",
+                     "swimming", "hiking", "trail_running", "strength_training")
+                     or "all" for no filter.  Supports partial/sub-sport matching.
         limit      – max rows returned (1–100, default 20)
 
     Response includes:
@@ -66,14 +69,17 @@ async def get_recent_activities(
     # Clamp inputs
     days = max(1, min(days, 90))
     limit = max(1, min(limit, 100))
-    if sport_type not in ("running", "cycling", "swimming", "all", None):
+    if sport_type:
+        sport_type = sport_type.strip().lower()
+    if not sport_type:
         sport_type = "all"
 
     try:
-        rows = influx.query_recent_activities(
-            days=days,
-            sport_type=sport_type if sport_type != "all" else None,
-            limit=limit,
+        rows = await asyncio.to_thread(
+            influx.query_recent_activities,
+            days,
+            sport_type if sport_type != "all" else None,
+            limit,
         )
     except ConnectionError as exc:
         return {

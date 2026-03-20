@@ -1,7 +1,7 @@
 """
 Garmin MCP Server — data access layer for garmin-grafana InfluxDB.
 
-Exposes eight MCP tools over HTTP (streamable-HTTP transport):
+Exposes nine MCP tools over HTTP (streamable-HTTP transport):
   • get_last_activity
   • get_recent_activities
   • get_weekly_load_summary
@@ -10,6 +10,7 @@ Exposes eight MCP tools over HTTP (streamable-HTTP transport):
   • get_fitness_trend
   • get_training_zones
   • explore_schema
+  • get_stress_body_battery
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -19,6 +20,7 @@ from __future__ import annotations
 import os
 import sys
 import logging
+import asyncio
 
 from dotenv import load_dotenv
 
@@ -47,6 +49,8 @@ from tools.recovery import get_daily_recovery  # noqa: E402
 from tools.detail import get_activity_details  # noqa: E402
 from tools.fitness import get_fitness_trend, get_training_zones  # noqa: E402
 from tools.schema import explore_schema  # noqa: E402
+from tools.stress import get_stress_body_battery  # noqa: E402
+from tools.records import get_personal_records  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -93,7 +97,13 @@ async def get_last_activity_tool() -> dict:
     Returns fields: timestamp, sport_type, distance_km, duration_minutes,
     avg_hr, max_hr, calories, avg_pace_min_per_km (runs/swims),
     avg_speed_kmh (cycling/other), elevation_gain_m, avg_cadence,
-    normalized_power.  Fields not recorded by Garmin show as null.
+    avg_power.  Fields not recorded by Garmin show as null.
+
+    Power note: only avg_power (duration-weighted average from lap data) is
+    available.  Normalized Power (NP) cannot be queried or calculated — the
+    upstream database does not store the required second-by-second data in a
+    form that can be aggregated without crashing the server.  Do not attempt
+    to compute or estimate NP.
     """
     return await get_last_activity()
 
@@ -112,8 +122,11 @@ async def get_recent_activities_tool(
     days : int
         Look-back window in days.  Range: 1–90.  Default: 7.
     sport_type : str
-        Filter by sport.  Accepted values: "running", "cycling",
-        "swimming", "all".  Default: "all".
+        Filter by sport.  Any valid Garmin sport type string
+        (e.g. "running", "cycling", "swimming", "hiking",
+        "trail_running", "strength_training").  Supports partial
+        matching for sub-sports (e.g. "cycling" matches
+        "indoor_cycling").  Use "all" for no filter.  Default: "all".
     limit : int
         Maximum number of records returned.  Range: 1–100.  Default: 20.
 
@@ -248,8 +261,10 @@ async def get_training_zones_tool(days: int = 30, sport_type: str = "all") -> di
     days : int
         Look-back window in days.  Range: 7–180.  Default: 30.
     sport_type : str
-        Filter by sport.  Accepted values: "running", "cycling",
-        "swimming", "all".  Default: "all".
+        Filter by sport.  Any valid Garmin sport type string
+        (e.g. "running", "cycling", "swimming", "hiking",
+        "trail_running").  Supports partial matching for sub-sports.
+        Use "all" for no filter.  Default: "all".
 
     Returns
     -------
@@ -298,6 +313,69 @@ async def explore_schema_tool(measurement_name: str | None = None) -> dict:
     return await explore_schema(measurement_name=measurement_name)
 
 
+@mcp.tool()
+async def get_stress_body_battery_tool(days: int = 7) -> dict:
+    """
+    Return daily stress breakdown and body battery trend.
+
+    Parameters
+    ----------
+    days : int
+        Look-back window in days.  Range: 7–30.  Default: 7.
+
+    Returns
+    -------
+    days : list
+        One entry per date (newest first), each containing:
+        - stress       : high_min, medium_min, low_min, rest_min,
+                         total_stress_min
+        - body_battery : at_wake, high, low, drained, charged
+    summary
+        Period averages and trend direction for body battery
+        ("improving" / "declining" / "stable") and stress
+        ("improving" / "worsening" / "stable").
+    """
+    return await get_stress_body_battery(days=days)
+
+
+@mcp.tool()
+async def get_personal_records_tool(sport_type: str = "all") -> dict:
+    """
+    Return all-time personal records (best metrics) grouped by sport type.
+
+    Uses a full scan of ActivitySummary to find the best value for each
+    metric, along with the activity_id, date, and activity_name of the
+    record-setting activity.
+
+    Parameters
+    ----------
+    sport_type : str
+        Filter by sport.  Any valid Garmin sport type string
+        (e.g. "running", "cycling", "swimming", "hiking",
+        "trail_running").  Supports partial matching for sub-sports.
+        Use "all" to get records for every sport.  Default: "all".
+
+    Returns
+    -------
+    records_by_sport
+        Dict keyed by sport type, each containing records with:
+        - longest_distance, longest_duration, top_speed,
+          highest_max_hr, highest_avg_hr, most_calories,
+          highest_avg_power, highest_max_power
+        - fastest_avg_pace (pace sports) or fastest_avg_speed (speed sports)
+        Each record has: value, unit, activity_id, date, activity_name.
+    summary
+        total_sports, total_activities, sport_list.
+
+    Power limitation: only avg_power (duration-weighted lap average) and
+    max_power (peak watt from ActivityGPS) are available.  Normalized Power
+    (NP) is impossible to calculate — do not attempt to query, compute, or
+    estimate it.  The database does not expose the necessary data without
+    transferring millions of raw samples, which will crash the server.
+    """
+    return await get_personal_records(sport_type=sport_type)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -323,7 +401,7 @@ async def lifespan(app):
         yield
 
 
-app = FastAPI(title="Garmin MCP Server", version="0.1.0", redirect_slashes=False, lifespan=lifespan)
+app = FastAPI(title="Garmin MCP Server", version="1.1.0", redirect_slashes=False, lifespan=lifespan)
 
 
 @app.get("/health", response_class=JSONResponse)
@@ -334,16 +412,16 @@ async def health_check():
     Returns InfluxDB connectivity status, last recorded activity timestamp,
     available measurements, and the MCP endpoint URL.
     """
-    connected = influx.ping()
+    connected = await asyncio.to_thread(influx.ping)
     influx_status = "connected" if connected else "unreachable"
 
     last_ts = None
     measurements: list[str] = []
 
     if connected:
-        measurements = influx.get_measurements()
+        measurements = await asyncio.to_thread(influx.get_measurements)
         try:
-            last = influx.query_last_activity()
+            last = await asyncio.to_thread(influx.query_last_activity)
             if last:
                 last_ts = last.get("timestamp")
         except Exception:

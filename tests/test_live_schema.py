@@ -78,6 +78,8 @@ class TestMeasurementsExist:
         "VO2_Max",
         "RacePredictions",
         "BodyComposition",
+        "StressIntraday",
+        "BodyBatteryIntraday",
     ])
     def test_optional_measurement_exists(self, measurements, measurement):
         """These measurements may not be present for all users but are expected."""
@@ -184,5 +186,39 @@ class TestHRVFields:
     def test_hrv_value_field(self, fields):
         assert "hrvValue" in fields, (
             f"Field 'hrvValue' missing from HRV_Intraday. "
+            f"Available fields: {sorted(fields)}"
+        )
+
+
+# -------------------------------------------------------------------
+# Critical fields in StressIntraday
+# -------------------------------------------------------------------
+
+class TestStressIntradayFields:
+
+    @pytest.fixture(scope="class")
+    def fields(self) -> set[str]:
+        return _field_names("StressIntraday")
+
+    def test_stress_level_field(self, fields):
+        assert "stressLevel" in fields, (
+            f"Field 'stressLevel' missing from StressIntraday. "
+            f"Available fields: {sorted(fields)}"
+        )
+
+
+# -------------------------------------------------------------------
+# Critical fields in BodyBatteryIntraday
+# -------------------------------------------------------------------
+
+class TestBodyBatteryIntradayFields:
+
+    @pytest.fixture(scope="class")
+    def fields(self) -> set[str]:
+        return _field_names("BodyBatteryIntraday")
+
+    def test_body_battery_level_field(self, fields):
+        assert "BodyBatteryLevel" in fields, (
+            f"Field 'BodyBatteryLevel' missing from BodyBatteryIntraday. "
             f"Available fields: {sorted(fields)}"
         )

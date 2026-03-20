@@ -5,10 +5,11 @@ Pure data retrieval — no planning logic.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import influx
-from utils import safe_float, iso_week_label, week_start_from_label
+from utils import safe_float, pick, iso_week_label, week_start_from_label
 
 
 # ---------------------------------------------------------------------------
@@ -56,10 +57,12 @@ async def get_fitness_trend(weeks: int = 12) -> dict[str, Any]:
     weeks = max(4, min(weeks, 52))
 
     # All non-fatal individually
-    vo2_rows = influx.query_vo2max_weekly(weeks)
-    race_rows = influx.query_race_predictions_weekly(weeks)
-    weight_rows = influx.query_weight_weekly(weeks)
-    rhr_rows = influx.query_resting_hr_weekly(weeks)
+    vo2_rows, race_rows, weight_rows, rhr_rows = await asyncio.gather(
+        asyncio.to_thread(influx.query_vo2max_weekly, weeks),
+        asyncio.to_thread(influx.query_race_predictions_weekly, weeks),
+        asyncio.to_thread(influx.query_weight_weekly, weeks),
+        asyncio.to_thread(influx.query_resting_hr_weekly, weeks),
+    )
 
     # -- Index each by ISO week --
     vo2_by_week = _index_by_week(vo2_rows, lambda r: {
@@ -181,7 +184,9 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
 
     Parameters:
         days       – look-back window in days (7–180, default 30)
-        sport_type – filter: "running", "cycling", "swimming", or "all"
+        sport_type – filter by Garmin sport type (e.g. "running", "cycling",
+                     "swimming", "hiking", "trail_running") or "all" for no
+                     filter.  Supports partial/sub-sport matching.
 
     Returns:
         zone_distribution  – total minutes and % per zone
@@ -189,11 +194,13 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
         by_sport           – per-sport zone distribution (when multiple sports)
     """
     days = max(7, min(days, 180))
-    if sport_type not in ("running", "cycling", "swimming", "all", None):
+    if sport_type:
+        sport_type = sport_type.strip().lower()
+    if not sport_type:
         sport_type = "all"
 
     try:
-        raw_rows = influx.query_activity_hr_zones(days=days, limit=days * 5)
+        raw_rows = await asyncio.to_thread(influx.query_activity_hr_zones, days, days * 5)
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",
@@ -210,10 +217,10 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
     ]
 
     def _get_sport(row):
-        for k in ("activityType", "activity_type", "sport_type", "sport"):
-            v = row.get(k)
-            if v and str(v).lower().strip() != "no activity":
-                return str(v).lower().strip()
+        """Extract sport type using same field priority as normalise_activity()."""
+        v = pick(row, "sport_type", "sport", "activityType", "activity_type")
+        if v and str(v).lower().strip() != "no activity":
+            return str(v).lower().strip()
         return None
 
     overall = [0.0] * 5
@@ -225,7 +232,7 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
         if row_sport is None:
             continue
 
-        if sport_type and sport_type != "all" and row_sport != sport_type:
+        if sport_type and sport_type != "all" and sport_type not in row_sport:
             continue
 
         zones = []

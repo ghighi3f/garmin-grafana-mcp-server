@@ -4,12 +4,23 @@ All InfluxQL / Flux queries live here — never inline in tools.
 """
 
 import os
+import re
 import logging
+import threading
+import atexit
+from datetime import datetime, timezone
 from typing import Any
 
 from utils import pick, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Connection singletons (lazy, thread-safe)
+# ---------------------------------------------------------------------------
+_client_lock = threading.Lock()
+_v1_singleton: Any = None
+_v2_singleton: Any = None
 
 # ---------------------------------------------------------------------------
 # Config (read once from environment)
@@ -33,9 +44,16 @@ MEASUREMENT_DAILY_STATS = os.getenv("MEASUREMENT_DAILY_STATS", "DailyStats")
 MEASUREMENT_SLEEP_SUMMARY = os.getenv("MEASUREMENT_SLEEP_SUMMARY", "SleepSummary")
 MEASUREMENT_ACTIVITY_SESSION = os.getenv("MEASUREMENT_ACTIVITY_SESSION", "ActivitySession")
 MEASUREMENT_ACTIVITY_LAP = os.getenv("MEASUREMENT_ACTIVITY_LAP", "ActivityLap")
+MEASUREMENT_ACTIVITY_GPS = os.getenv("MEASUREMENT_ACTIVITY_GPS", "ActivityGPS")
 MEASUREMENT_VO2_MAX = os.getenv("MEASUREMENT_VO2_MAX", "VO2_Max")
 MEASUREMENT_RACE_PREDICTIONS = os.getenv("MEASUREMENT_RACE_PREDICTIONS", "RacePredictions")
 MEASUREMENT_BODY_COMPOSITION = os.getenv("MEASUREMENT_BODY_COMPOSITION", "BodyComposition")
+
+# Intraday measurements for live "today" data
+MEASUREMENT_STRESS_INTRADAY = os.getenv("MEASUREMENT_STRESS_INTRADAY", "StressIntraday")
+MEASUREMENT_BODY_BATTERY_INTRADAY = os.getenv("MEASUREMENT_BODY_BATTERY_INTRADAY", "BodyBatteryIntraday")
+FIELD_STRESS_LEVEL = os.getenv("FIELD_STRESS_LEVEL", "stressLevel")
+FIELD_BODY_BATTERY_LEVEL = os.getenv("FIELD_BODY_BATTERY_LEVEL", "BodyBatteryLevel")
 
 # Field names within measurements — override if your schema uses different names
 FIELD_RESTING_HR = os.getenv("FIELD_RESTING_HR", "restingHeartRate")
@@ -53,32 +71,84 @@ FIELD_HR_ZONE_3 = os.getenv("FIELD_HR_ZONE_3", "hrTimeInZone_3")
 FIELD_HR_ZONE_4 = os.getenv("FIELD_HR_ZONE_4", "hrTimeInZone_4")
 FIELD_HR_ZONE_5 = os.getenv("FIELD_HR_ZONE_5", "hrTimeInZone_5")
 
+# Sports that use pace (min/km) instead of speed (km/h)
+PACE_SPORTS: frozenset[str] = frozenset({
+    "running", "run",
+    "swimming", "swim",
+    "walk", "hiking",
+    "trail_running", "trail running",
+})
+
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
 
 def _v1_client():
-    from influxdb import InfluxDBClient  # type: ignore
-    return InfluxDBClient(
-        host=INFLUXDB_HOST,
-        port=INFLUXDB_PORT,
-        username=INFLUXDB_USERNAME,
-        password=INFLUXDB_PASSWORD,
-        database=INFLUXDB_DATABASE,
-    )
+    """Return the v1 client singleton (lazy, thread-safe)."""
+    global _v1_singleton
+    if _v1_singleton is None:
+        with _client_lock:
+            if _v1_singleton is None:
+                from influxdb import InfluxDBClient  # type: ignore
+                _v1_singleton = InfluxDBClient(
+                    host=INFLUXDB_HOST,
+                    port=INFLUXDB_PORT,
+                    username=INFLUXDB_USERNAME,
+                    password=INFLUXDB_PASSWORD,
+                    database=INFLUXDB_DATABASE,
+                )
+    return _v1_singleton
 
 
 def _v2_client():
-    from influxdb_client import InfluxDBClient  # type: ignore
-    url = f"http://{INFLUXDB_HOST}:{INFLUXDB_PORT}"
-    return InfluxDBClient(url=url, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+    """Return the v2 client singleton (lazy, thread-safe)."""
+    global _v2_singleton
+    if _v2_singleton is None:
+        with _client_lock:
+            if _v2_singleton is None:
+                from influxdb_client import InfluxDBClient  # type: ignore
+                url = f"http://{INFLUXDB_HOST}:{INFLUXDB_PORT}"
+                _v2_singleton = InfluxDBClient(url=url, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+    return _v2_singleton
+
+
+def _close_clients():
+    """Close singleton clients on interpreter shutdown."""
+    global _v1_singleton, _v2_singleton
+    for client in (_v1_singleton, _v2_singleton):
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+    _v1_singleton = None
+    _v2_singleton = None
+
+
+atexit.register(_close_clients)
 
 
 def get_client():
-    """Return the appropriate client based on INFLUXDB_VERSION."""
+    """Return the shared client singleton based on INFLUXDB_VERSION."""
     if INFLUXDB_VERSION == 2:
         return _v2_client()
     return _v1_client()
+
+
+def sanitize_sport_type(sport_type: str | None) -> str | None:
+    """
+    Sanitize a user-provided sport_type for safe interpolation into
+    InfluxQL / Flux queries.
+
+    Returns None if the value is None, empty, or "all".
+    Raises ValueError for characters that could enable query injection.
+    """
+    if sport_type is None or sport_type.strip() == "" or sport_type.strip().lower() == "all":
+        return None
+    cleaned = sport_type.strip().lower()
+    if not re.match(r'^[a-z0-9 _-]+$', cleaned):
+        raise ValueError(f"Invalid sport_type: {sport_type!r}")
+    return cleaned
 
 
 def normalise_activity(row: dict) -> dict:
@@ -91,19 +161,18 @@ def normalise_activity(row: dict) -> dict:
     sport = sport.lower().strip()
 
     distance_raw = safe_float(pick(row, "distance", "total_distance"))
-    # garmin-grafana stores distance in metres; convert to km
-    distance_km = round(distance_raw / 1000.0, 3) if distance_raw and distance_raw > 500 else (
-        round(distance_raw, 3) if distance_raw else None
-    )
+    # garmin-grafana always stores distance in metres
+    distance_km = round(distance_raw / 1000.0, 3) if distance_raw else None
 
     duration_raw = safe_float(pick(
         row, "elapsedDuration", "duration", "elapsed_duration",
         "total_elapsed_time", "totalElapsedTime", "moving_duration", "movingDuration"
     ))
-    # duration in seconds → minutes
-    duration_minutes = round(duration_raw / 60.0, 2) if duration_raw and duration_raw > 300 else (
-        round(duration_raw, 2) if duration_raw else None
-    )
+    # garmin-grafana always stores duration in seconds
+    duration_minutes = round(duration_raw / 60.0, 2) if duration_raw else None
+
+    moving_raw = safe_float(pick(row, "movingDuration", "moving_duration"))
+    moving_minutes = round(moving_raw / 60.0, 2) if moving_raw else None
 
     avg_hr = safe_float(pick(row, "average_hr", "avg_hr", "averageHR", "average_heart_rate"))
     max_hr = safe_float(pick(row, "max_hr", "maxHR", "max_heart_rate"))
@@ -117,8 +186,8 @@ def normalise_activity(row: dict) -> dict:
     cadence = safe_float(pick(row, "average_cadence", "avg_cadence", "averageCadence"))
     if cadence: cadence = round(cadence, 1)
 
-    np_val = safe_float(pick(row, "normalized_power", "normalisedPower", "np"))
-    if np_val: np_val = round(np_val, 1)
+    avg_power_val = safe_float(pick(row, "averagePower", "avg_power", "average_power"))
+    if avg_power_val: avg_power_val = round(avg_power_val, 1)
 
     avg_speed_raw = safe_float(pick(
         row, "average_speed", "avg_speed", "averageSpeed", "enhanced_avg_speed"
@@ -127,10 +196,15 @@ def normalise_activity(row: dict) -> dict:
         round(avg_speed_raw, 2) if avg_speed_raw else None
     )
 
-    # Pace (min/km) for run/swim; speed (km/h) for cycling/row
+    max_speed_raw = safe_float(pick(row, "maxSpeed", "max_speed", "enhanced_max_speed"))
+    max_speed_kmh = round(max_speed_raw * 3.6, 2) if max_speed_raw and max_speed_raw < 100 else (
+        round(max_speed_raw, 2) if max_speed_raw else None
+    )
+
+    # Pace (min/km) for run/swim/walk/hike; speed (km/h) for cycling/row/etc.
     if avg_speed_kmh and avg_speed_kmh > 0:
-        avg_pace = round(60.0 / avg_speed_kmh, 2) if sport in ("running", "run", "swimming", "swim", "walk", "hiking") else None
-        avg_speed_out = avg_speed_kmh if sport not in ("running", "run", "swimming", "swim") else None
+        avg_pace = round(60.0 / avg_speed_kmh, 2) if sport in PACE_SPORTS else None
+        avg_speed_out = avg_speed_kmh if sport not in PACE_SPORTS else None
     else:
         avg_pace = None
         avg_speed_out = None
@@ -160,6 +234,7 @@ def normalise_activity(row: dict) -> dict:
     } if _total_zone_min > 0 else None
 
     activity_id = pick(row, "Activity_ID", "ActivityID", "activity_id", "activityId")
+    activity_name = pick(row, "activityName", "activity_name", "name")
 
     ts = row.get("time") or row.get("timestamp")
     if ts and hasattr(ts, "isoformat"):
@@ -168,17 +243,21 @@ def normalise_activity(row: dict) -> dict:
     return {
         "activity_id": activity_id,
         "timestamp": ts,
+        "activity_name": activity_name,
         "sport_type": sport,
         "distance_km": distance_km,
         "duration_minutes": duration_minutes,
+        "moving_duration_minutes": moving_minutes,
         "avg_hr": avg_hr,
         "max_hr": max_hr,
         "calories": calories,
         "avg_pace_min_per_km": avg_pace,
         "avg_speed_kmh": avg_speed_out,
+        "max_speed_kmh": max_speed_kmh,
         "elevation_gain_m": elev,
         "avg_cadence": cadence,
-        "normalized_power": np_val,
+        "avg_power": avg_power_val,
+        "max_power": None,  # backfilled from ActivityGPS by query_all_activities()
         "hr_zones": hr_zones,
     }
 
@@ -257,9 +336,8 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
     index = safe_int(pick(row, "Index", "index", "lap_index"))
 
     dist_raw = safe_float(pick(row, "Distance", "distance"))
-    dist_km = round(dist_raw / 1000.0, 3) if dist_raw and dist_raw > 500 else (
-        round(dist_raw, 3) if dist_raw else None
-    )
+    # garmin-grafana always stores distance in metres
+    dist_km = round(dist_raw / 1000.0, 3) if dist_raw else None
 
     elapsed_raw = safe_float(pick(row, "Elapsed_Time", "elapsed_time", "total_elapsed_time"))
     # Lap durations are typically < 300s, so use seconds-to-minutes without heuristic
@@ -274,8 +352,7 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
         round(max_speed_raw, 2) if max_speed_raw else None
     )
 
-    pace_sports = ("running", "run", "swimming", "swim", "walk", "hiking")
-    avg_pace = round(60.0 / avg_speed_kmh, 2) if avg_speed_kmh and avg_speed_kmh > 0 and sport in pace_sports else None
+    avg_pace = round(60.0 / avg_speed_kmh, 2) if avg_speed_kmh and avg_speed_kmh > 0 and sport in PACE_SPORTS else None
 
     return {
         "index": index,
@@ -283,8 +360,8 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
         "elapsed_time_minutes": elapsed_min,
         "avg_hr": safe_float(pick(row, "Avg_HR", "avg_hr")),
         "max_hr": safe_float(pick(row, "Max_HR", "max_hr")),
-        "avg_speed_kmh": avg_speed_kmh if sport not in pace_sports else None,
-        "max_speed_kmh": max_speed_kmh if sport not in pace_sports else None,
+        "avg_speed_kmh": avg_speed_kmh if sport not in PACE_SPORTS else None,
+        "max_speed_kmh": max_speed_kmh if sport not in PACE_SPORTS else None,
         "avg_pace_min_per_km": avg_pace,
         "calories": safe_int(pick(row, "Calories", "calories")),
         "avg_cadence": safe_float(pick(row, "Avg_Cadence", "avg_cadence")),
@@ -299,20 +376,14 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
 
 def _v1_query(q: str) -> list[dict]:
     client = _v1_client()
-    try:
-        result = client.query(q)
-        return list(result.get_points())
-    finally:
-        client.close()
+    result = client.query(q)
+    return list(result.get_points())
 
 
 def _v1_show_measurements() -> list[str]:
     client = _v1_client()
-    try:
-        result = client.query("SHOW MEASUREMENTS")
-        return [p["name"] for p in result.get_points()]
-    finally:
-        client.close()
+    result = client.query("SHOW MEASUREMENTS")
+    return [p["name"] for p in result.get_points()]
 
 
 # ---------------------------------------------------------------------------
@@ -321,16 +392,13 @@ def _v1_show_measurements() -> list[str]:
 
 def _v2_query(q: str) -> list[dict]:
     client = _v2_client()
-    try:
-        qapi = client.query_api()
-        tables = qapi.query(q)
-        rows = []
-        for table in tables:
-            for record in table.records:
-                rows.append(record.values)
-        return rows
-    finally:
-        client.close()
+    qapi = client.query_api()
+    tables = qapi.query(q)
+    rows = []
+    for table in tables:
+        for record in table.records:
+            rows.append(record.values)
+    return rows
 
 
 def _v2_show_measurements() -> list[str]:
@@ -339,16 +407,13 @@ def _v2_show_measurements() -> list[str]:
     schema.measurements(bucket: "{INFLUXDB_DATABASE}")
     '''
     client = _v2_client()
-    try:
-        qapi = client.query_api()
-        tables = qapi.query(q)
-        names = []
-        for table in tables:
-            for record in table.records:
-                names.append(record.get_value())
-        return names
-    finally:
-        client.close()
+    qapi = client.query_api()
+    tables = qapi.query(q)
+    names = []
+    for table in tables:
+        for record in table.records:
+            names.append(record.get_value())
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -370,13 +435,9 @@ def ping() -> bool:
     """Return True if InfluxDB responds."""
     try:
         if INFLUXDB_VERSION == 2:
-            client = _v2_client()
-            client.health()
-            client.close()
+            _v2_client().health()
         else:
-            client = _v1_client()
-            client.ping()
-            client.close()
+            _v1_client().ping()
         return True
     except Exception:
         return False
@@ -426,13 +487,20 @@ def query_recent_activities(days: int, sport_type: str | None, limit: int) -> li
     Return activity rows for the last `days` days, optionally filtered
     by sport_type, newest-first, capped at `limit`.
     """
+    try:
+        sport_type = sanitize_sport_type(sport_type)
+    except ValueError:
+        sport_type = None  # invalid input → no filter
+
     raw_rows: list[dict] = []
 
     if INFLUXDB_VERSION == 2:
         sport_filter = ""
-        if sport_type and sport_type != "all":
+        if sport_type:
             sport_filter = (
-                f'|> filter(fn: (r) => r["sport_type"] == "{sport_type}" or r["sport"] == "{sport_type}")'
+                f'|> filter(fn: (r) => r["sport_type"] =~ /.*{sport_type}.*/i'
+                f' or r["sport"] =~ /.*{sport_type}.*/i'
+                f' or r["activityType"] =~ /.*{sport_type}.*/i)'
             )
         q = f'''
         from(bucket: "{INFLUXDB_DATABASE}")
@@ -449,10 +517,13 @@ def query_recent_activities(days: int, sport_type: str | None, limit: int) -> li
             raise ConnectionError(str(exc)) from exc
     else:
         sport_clause = ""
-        if sport_type and sport_type != "all":
-            # match both tag and field variants
+        if sport_type:
+            # Regex match: catches sub-sports (e.g. "cycling" matches
+            # "road_biking" won't, but "cycling" matches "indoor_cycling").
             sport_clause = (
-                f" AND (\"sport_type\" = '{sport_type}' OR \"sport\" = '{sport_type}')"
+                f" AND (\"sport_type\" =~ /.*{sport_type}.*/"
+                f" OR \"sport\" =~ /.*{sport_type}.*/"
+                f" OR \"activityType\" =~ /.*{sport_type}.*/)"
             )
         q = (
             f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '
@@ -559,7 +630,71 @@ def query_daily_stats(days: int) -> list[dict]:
             raw = _v1_query(q)
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
-    return [normalise_daily_stats(r) for r in raw]
+    return [normalise_daily_stats(r) for r in _dedup_rows(raw)]
+
+
+def query_stress_intraday_today() -> list[dict]:
+    """Return raw StressIntraday readings from UTC midnight today to now.
+
+    Returns [] silently if the measurement doesn't exist or has no data.
+    """
+    today_start = (
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: {today_start})
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_STRESS_INTRADAY}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: false)
+            '''
+            return _dedup_rows(_v2_query(q))
+        else:
+            q = (
+                f'SELECT * FROM "{MEASUREMENT_STRESS_INTRADAY}" '
+                f"WHERE time >= '{today_start}' "
+                f"ORDER BY time ASC"
+            )
+            return _dedup_rows(_v1_query(q))
+    except Exception as exc:
+        logger.debug("StressIntraday query failed (non-fatal): %s", exc)
+        return []
+
+
+def query_body_battery_intraday_today() -> list[dict]:
+    """Return raw BodyBatteryIntraday readings from UTC midnight today to now.
+
+    Returns [] silently if the measurement doesn't exist or has no data.
+    """
+    today_start = (
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: {today_start})
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_BODY_BATTERY_INTRADAY}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: false)
+            '''
+            return _dedup_rows(_v2_query(q))
+        else:
+            q = (
+                f'SELECT * FROM "{MEASUREMENT_BODY_BATTERY_INTRADAY}" '
+                f"WHERE time >= '{today_start}' "
+                f"ORDER BY time ASC"
+            )
+            return _dedup_rows(_v1_query(q))
+    except Exception as exc:
+        logger.debug("BodyBatteryIntraday query failed (non-fatal): %s", exc)
+        return []
 
 
 def query_sleep_summary(days: int) -> list[dict]:
@@ -589,6 +724,45 @@ def query_sleep_summary(days: int) -> list[dict]:
     return [normalise_sleep(r) for r in raw]
 
 
+def _non_null_count(row: dict) -> int:
+    """Count non-None, non-empty values (ignoring tag/meta keys)."""
+    _SKIP = {"time", "_time", "Device", "Database_Name", "ActivitySelector", "ActivityID"}
+    return sum(1 for k, v in row.items() if k not in _SKIP and v is not None and v != "")
+
+
+def _dedup_rows(rows: list[dict], key: str = "time") -> list[dict]:
+    """
+    Remove duplicate rows caused by garmin-grafana writing one row per
+    device (e.g. Edge 540 + Forerunner 165).  When duplicates exist,
+    keeps the row with the most populated fields.
+    """
+    groups: dict[Any, list[dict]] = {}
+    for r in rows:
+        k = r.get(key)
+        groups.setdefault(k, []).append(r)
+    out: list[dict] = []
+    for group in groups.values():
+        best = max(group, key=_non_null_count) if len(group) > 1 else group[0]
+        out.append(best)
+    return out
+
+
+def _dedup_laps(rows: list[dict]) -> list[dict]:
+    """
+    Remove duplicate lap rows using (time, Index) as composite key.
+    Keeps the row with the most populated fields.
+    """
+    groups: dict[Any, list[dict]] = {}
+    for r in rows:
+        k = (r.get("time") or r.get("_time"), r.get("Index"))
+        groups.setdefault(k, []).append(r)
+    out: list[dict] = []
+    for group in groups.values():
+        best = max(group, key=_non_null_count) if len(group) > 1 else group[0]
+        out.append(best)
+    return out
+
+
 def query_activity_summary_by_id(activity_id: str) -> list[dict]:
     """
     Return raw ActivitySummary rows for a specific activity ID.
@@ -603,7 +777,7 @@ def query_activity_summary_by_id(activity_id: str) -> list[dict]:
           |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
         try:
-            return _v2_query(q)
+            return _dedup_rows(_v2_query(q))
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
     else:
@@ -612,7 +786,7 @@ def query_activity_summary_by_id(activity_id: str) -> list[dict]:
             f"WHERE \"ActivityID\" = '{activity_id}'"
         )
         try:
-            return _v1_query(q)
+            return _dedup_rows(_v1_query(q))
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
 
@@ -631,13 +805,13 @@ def query_activity_session_by_id(activity_id: str) -> list[dict]:
               |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
               |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
             '''
-            return _v2_query(q)
+            return _dedup_rows(_v2_query(q))
         else:
             q = (
                 f'SELECT * FROM "{MEASUREMENT_ACTIVITY_SESSION}" '
                 f"WHERE \"ActivityID\" = '{activity_id}'"
             )
-            return _v1_query(q)
+            return _dedup_rows(_v1_query(q))
     except Exception as exc:
         logger.debug("ActivitySession query failed (non-fatal): %s", exc)
         return []
@@ -658,14 +832,14 @@ def query_activity_laps_by_id(activity_id: str) -> list[dict]:
               |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
               |> sort(columns: ["_time"], desc: false)
             '''
-            return _v2_query(q)
+            return _dedup_laps(_v2_query(q))
         else:
             q = (
                 f'SELECT * FROM "{MEASUREMENT_ACTIVITY_LAP}" '
                 f"WHERE \"ActivityID\" = '{activity_id}' "
                 f"ORDER BY time ASC"
             )
-            return _v1_query(q)
+            return _dedup_laps(_v1_query(q))
     except Exception as exc:
         logger.debug("ActivityLap query failed (non-fatal): %s", exc)
         return []
@@ -768,31 +942,23 @@ def query_field_keys(measurement: str) -> list[dict[str, str]]:
                 measurement: "{measurement}",
             )
             '''
-            client = _v2_client()
-            try:
-                tables = client.query_api().query(q)
-                fields = []
-                for table in tables:
-                    for record in table.records:
-                        fields.append({
-                            "field": record.get_value(),
-                            "type": record.values.get("type", "unknown"),
-                        })
-                return fields
-            finally:
-                client.close()
+            tables = _v2_client().query_api().query(q)
+            fields = []
+            for table in tables:
+                for record in table.records:
+                    fields.append({
+                        "field": record.get_value(),
+                        "type": record.values.get("type", "unknown"),
+                    })
+            return fields
         else:
-            client = _v1_client()
-            try:
-                result = client.query(
-                    f'SHOW FIELD KEYS FROM "{measurement}"'
-                )
-                return [
-                    {"field": p["fieldKey"], "type": p.get("fieldType", "unknown")}
-                    for p in result.get_points()
-                ]
-            finally:
-                client.close()
+            result = _v1_client().query(
+                f'SHOW FIELD KEYS FROM "{measurement}"'
+            )
+            return [
+                {"field": p["fieldKey"], "type": p.get("fieldType", "unknown")}
+                for p in result.get_points()
+            ]
     except Exception as exc:
         logger.warning("Could not get field keys for %s: %s", measurement, exc)
         return []
@@ -812,28 +978,19 @@ def query_tag_keys(measurement: str) -> list[str]:
                 measurement: "{measurement}",
             )
             '''
-            client = _v2_client()
-            try:
-                tables = client.query_api().query(q)
-                tags = []
-                for table in tables:
-                    for record in table.records:
-                        val = record.get_value()
-                        # Skip internal Flux tags
-                        if not val.startswith("_"):
-                            tags.append(val)
-                return tags
-            finally:
-                client.close()
+            tables = _v2_client().query_api().query(q)
+            tags = []
+            for table in tables:
+                for record in table.records:
+                    val = record.get_value()
+                    if not val.startswith("_"):
+                        tags.append(val)
+            return tags
         else:
-            client = _v1_client()
-            try:
-                result = client.query(
-                    f'SHOW TAG KEYS FROM "{measurement}"'
-                )
-                return [p["tagKey"] for p in result.get_points()]
-            finally:
-                client.close()
+            result = _v1_client().query(
+                f'SHOW TAG KEYS FROM "{measurement}"'
+            )
+            return [p["tagKey"] for p in result.get_points()]
     except Exception as exc:
         logger.warning("Could not get tag keys for %s: %s", measurement, exc)
         return []
@@ -867,3 +1024,172 @@ def query_activity_hr_zones(days: int, limit: int) -> list[dict]:
             return _v1_query(q)
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
+
+
+def query_all_activities() -> list[dict]:
+    """
+    Return ALL activities from ActivitySummary (no time/limit filter),
+    deduplicated and normalised.  Used for personal records computation.
+    """
+    if INFLUXDB_VERSION == 2:
+        q = f'''
+        from(bucket: "{INFLUXDB_DATABASE}")
+          |> range(start: -3650d)
+          |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITIES}")
+          |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+          |> sort(columns: ["_time"], desc: true)
+        '''
+        try:
+            raw_rows = _v2_query(q)
+        except Exception as exc:
+            raise ConnectionError(str(exc)) from exc
+    else:
+        q = (
+            f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '
+            f'ORDER BY time DESC'
+        )
+        try:
+            raw_rows = _v1_query(q)
+        except Exception as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    deduped = _dedup_rows(raw_rows)
+    activities = [
+        a for a in (normalise_activity(r) for r in deduped)
+        if a.get("sport_type") != "no activity"
+    ]
+
+    # Backfill power/cadence from ActivityLap for activities that lack them
+    missing_ids = [
+        a["activity_id"] for a in activities
+        if a.get("activity_id") and a.get("avg_power") is None
+    ]
+    if missing_ids:
+        lap_power = _query_all_lap_power()
+        for act in activities:
+            aid = act.get("activity_id")
+            if not aid:
+                continue
+            entry = lap_power.get(str(aid))
+            if entry is None:
+                continue
+            pw, cad = entry
+            if act.get("avg_power") is None and pw is not None:
+                act["avg_power"] = pw
+            if act.get("avg_cadence") is None and cad is not None:
+                act["avg_cadence"] = cad
+
+    # Backfill max_power from ActivityGPS (single server-side MAX aggregate)
+    gps_max = _query_all_max_power_from_gps()
+    if gps_max:
+        for act in activities:
+            aid = act.get("activity_id")
+            if aid is not None:
+                act["max_power"] = gps_max.get(str(aid))
+
+    return activities
+
+
+def _query_all_lap_power() -> dict[str, tuple[float | None, float | None]]:
+    """
+    Bulk-fetch Avg_Power and Avg_Cadence from all ActivityLap rows,
+    compute duration-weighted averages per ActivityID.
+
+    Returns {activity_id: (weighted_avg_power, weighted_avg_cadence)}.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_LAP}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+            '''
+            raw = _v2_query(q)
+        else:
+            q = (
+                f'SELECT * FROM "{MEASUREMENT_ACTIVITY_LAP}" '
+                f'ORDER BY time ASC'
+            )
+            raw = _v1_query(q)
+    except Exception as exc:
+        logger.debug("Lap power bulk query failed (non-fatal): %s", exc)
+        return {}
+
+    deduped = _dedup_laps(raw)
+
+    # Group laps by ActivityID and compute weighted averages
+    from collections import defaultdict
+    by_activity: dict[str, list[dict]] = defaultdict(list)
+    for lap in deduped:
+        aid = lap.get("ActivityID") or lap.get("Activity_ID") or lap.get("activity_id")
+        if aid:
+            by_activity[str(aid)].append(lap)
+
+    result: dict[str, tuple[float | None, float | None]] = {}
+    for aid, laps in by_activity.items():
+        total_power_dur = 0.0
+        total_power_val = 0.0
+        total_cad_dur = 0.0
+        total_cad_val = 0.0
+        for lap in laps:
+            dur = safe_float(lap.get("Elapsed_Time") or lap.get("elapsed_time"))
+            if not dur or dur <= 0:
+                continue
+            pw = safe_float(lap.get("Avg_Power") or lap.get("avg_power"))
+            if pw is not None and pw > 0:
+                total_power_val += pw * dur
+                total_power_dur += dur
+            cad = safe_float(lap.get("Avg_Cadence") or lap.get("avg_cadence"))
+            if cad is not None and cad > 0:
+                total_cad_val += cad * dur
+                total_cad_dur += dur
+
+        avg_pw = round(total_power_val / total_power_dur, 1) if total_power_dur > 0 else None
+        avg_cad = round(total_cad_val / total_cad_dur, 1) if total_cad_dur > 0 else None
+        if avg_pw is not None or avg_cad is not None:
+            result[aid] = (avg_pw, avg_cad)
+
+    return result
+
+
+def _query_all_max_power_from_gps() -> dict[str, float]:
+    """
+    Return {activity_id: max_power_watts} via a server-side MAX() aggregate on
+    ActivityGPS.  Returns one value per activity — no raw samples transferred.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["_field"] == "Power")
+              |> group(columns: ["ActivityID"])
+              |> max()
+            '''
+            raw = _v2_query(q)
+            return {
+                str(r["ActivityID"]): float(r["_value"])
+                for r in raw
+                if r.get("ActivityID") and r.get("_value") is not None
+            }
+        else:
+            q = (
+                f'SELECT MAX("Power") FROM "{MEASUREMENT_ACTIVITY_GPS}" '
+                f'GROUP BY "ActivityID"'
+            )
+            result = _v1_client().query(q)
+            mapping: dict[str, float] = {}
+            for (_meas, tags), points in result.items():
+                if not tags or "ActivityID" not in tags:
+                    continue
+                aid = str(tags["ActivityID"])
+                for point in points:
+                    val = safe_float(point.get("max"))
+                    if val is not None:
+                        mapping[aid] = val
+            return mapping
+    except Exception as exc:
+        logger.debug("ActivityGPS max power query failed (non-fatal): %s", exc)
+        return {}

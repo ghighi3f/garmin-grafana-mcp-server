@@ -1,0 +1,24 @@
+name: Cleanup GHCR Packages
+
+on:
+  schedule:
+    - cron: '0 0 * * 0' # every Sunday at 00:00 UTC
+  workflow_dispatch:
+
+permissions:
+  packages: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run container retention policy
+        uses: snok/container-retention-policy@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          repository: ${{ github.repository }}
+          keep: 5
+          keep_tags: 'v*'
+          keep_latest: true
+          delete_untagged: true

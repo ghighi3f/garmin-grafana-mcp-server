@@ -27,6 +27,8 @@ from tools.load import get_weekly_load_summary  # noqa: E402
 from tools.recovery import get_daily_recovery  # noqa: E402
 from tools.detail import get_activity_details  # noqa: E402
 from tools.fitness import get_fitness_trend, get_training_zones  # noqa: E402
+from tools.stress import get_stress_body_battery  # noqa: E402
+from tools.records import get_personal_records  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -77,7 +79,7 @@ async def main() -> None:
     # 1. get_last_activity                                                 #
     # ------------------------------------------------------------------ #
     await _call(
-        "1 / 7  get_last_activity()",
+        "1 / 9  get_last_activity()",
         get_last_activity(),
     )
 
@@ -86,7 +88,7 @@ async def main() -> None:
     #    We also fish out the first activity_id for test 5 below.         #
     # ------------------------------------------------------------------ #
     recent_result = await _call(
-        "2 / 7  get_recent_activities(days=7, sport_type='all', limit=5)",
+        "2 / 9  get_recent_activities(days=7, sport_type='all', limit=5)",
         get_recent_activities(days=7, sport_type="all", limit=5),
     )
 
@@ -110,7 +112,7 @@ async def main() -> None:
     # 3. get_weekly_load_summary  (last 4 weeks)                          #
     # ------------------------------------------------------------------ #
     await _call(
-        "3 / 7  get_weekly_load_summary(weeks=4)",
+        "3 / 9  get_weekly_load_summary(weeks=4)",
         get_weekly_load_summary(weeks=4),
     )
 
@@ -118,7 +120,7 @@ async def main() -> None:
     # 4. get_daily_recovery  (last 7 days)                                #
     # ------------------------------------------------------------------ #
     await _call(
-        "4 / 7  get_daily_recovery(days=7)",
+        "4 / 9  get_daily_recovery(days=7)",
         get_daily_recovery(days=7),
     )
 
@@ -126,7 +128,7 @@ async def main() -> None:
     # 5. get_activity_details  (real ID from step 2, or dummy)            #
     # ------------------------------------------------------------------ #
     await _call(
-        f"5 / 7  get_activity_details(activity_id='{activity_id}')",
+        f"5 / 9  get_activity_details(activity_id='{activity_id}')",
         get_activity_details(activity_id=activity_id),
     )
 
@@ -134,7 +136,7 @@ async def main() -> None:
     # 6. get_fitness_trend  (last 12 weeks)                               #
     # ------------------------------------------------------------------ #
     await _call(
-        "6 / 7  get_fitness_trend(weeks=12)",
+        "6 / 9  get_fitness_trend(weeks=12)",
         get_fitness_trend(weeks=12),
     )
 
@@ -142,8 +144,24 @@ async def main() -> None:
     # 7. get_training_zones  (last 30 days, all sports)                   #
     # ------------------------------------------------------------------ #
     await _call(
-        "7 / 7  get_training_zones(days=30, sport_type='all')",
+        "7 / 9  get_training_zones(days=30, sport_type='all')",
         get_training_zones(days=30, sport_type="all"),
+    )
+
+    # ------------------------------------------------------------------ #
+    # 8. get_stress_body_battery  (last 14 days)                          #
+    # ------------------------------------------------------------------ #
+    await _call(
+        "8 / 9  get_stress_body_battery(days=14)",
+        get_stress_body_battery(days=14),
+    )
+
+    # ------------------------------------------------------------------ #
+    # 9. get_personal_records  (all sports)                               #
+    # ------------------------------------------------------------------ #
+    await _call(
+        "9 / 9  get_personal_records(sport_type='all')",
+        get_personal_records(sport_type="all"),
     )
 
     # ------------------------------------------------------------------ #

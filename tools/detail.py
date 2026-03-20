@@ -6,11 +6,12 @@ Pure data retrieval — no planning logic.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import influx
+from influx import normalise_activity, normalise_lap
 from utils import pick, safe_float, safe_int
-from influx import normalise_lap
 
 
 async def get_activity_details(activity_id: str) -> dict[str, Any]:
@@ -32,7 +33,9 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
 
     # -- 1. ActivitySummary --
     try:
-        summary_rows = influx.query_activity_summary_by_id(activity_id)
+        summary_rows = await asyncio.to_thread(
+            influx.query_activity_summary_by_id, activity_id
+        )
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",
@@ -54,93 +57,51 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
 
     raw = data_rows[0]
 
-    sport = (pick(raw, "activityType", "activity_type", "sport_type", "sport") or "unknown").lower().strip()
+    # Use the canonical normaliser for base fields (distance, duration,
+    # speed, HR, zones, cadence, power, elevation, pace).
+    base = normalise_activity(raw)
+    sport = base["sport_type"] or "unknown"
 
-    # Distance and duration — same heuristics as normalise_activity
-    dist_raw = safe_float(pick(raw, "distance", "total_distance"))
-    dist_km = round(dist_raw / 1000.0, 3) if dist_raw and dist_raw > 500 else (
-        round(dist_raw, 3) if dist_raw else None
-    )
-
-    dur_raw = safe_float(pick(raw, "elapsedDuration", "elapsed_duration", "duration"))
-    dur_min = round(dur_raw / 60.0, 2) if dur_raw and dur_raw > 300 else (
-        round(dur_raw, 2) if dur_raw else None
-    )
+    # Detail-only fields not covered by normalise_activity
     moving_raw = safe_float(pick(raw, "movingDuration", "moving_duration"))
     moving_min = round(moving_raw / 60.0, 2) if moving_raw and moving_raw > 300 else (
         round(moving_raw, 2) if moving_raw else None
     )
 
-    avg_speed_raw = safe_float(pick(raw, "averageSpeed", "average_speed", "avg_speed"))
-    avg_speed_kmh = round(avg_speed_raw * 3.6, 2) if avg_speed_raw and avg_speed_raw < 100 else (
-        round(avg_speed_raw, 2) if avg_speed_raw else None
-    )
     max_speed_raw = safe_float(pick(raw, "maxSpeed", "max_speed"))
     max_speed_kmh = round(max_speed_raw * 3.6, 2) if max_speed_raw and max_speed_raw < 100 else (
         round(max_speed_raw, 2) if max_speed_raw else None
     )
 
-    ts = raw.get("time") or raw.get("_time")
-    if ts and hasattr(ts, "isoformat"):
-        ts = ts.isoformat()
-
-    # HR zones: seconds → minutes + percentage of total zone time
-    _zone_secs = [
-        safe_float(raw.get(influx.FIELD_HR_ZONE_1)) or 0.0,
-        safe_float(raw.get(influx.FIELD_HR_ZONE_2)) or 0.0,
-        safe_float(raw.get(influx.FIELD_HR_ZONE_3)) or 0.0,
-        safe_float(raw.get(influx.FIELD_HR_ZONE_4)) or 0.0,
-        safe_float(raw.get(influx.FIELD_HR_ZONE_5)) or 0.0,
-    ]
-    _zone_mins = [round(s / 60.0, 1) for s in _zone_secs]
-    _total_zone_min = sum(_zone_mins)
-
-    def _zone_pct(val):
-        if not val or _total_zone_min <= 0:
-            return None
-        return round(val / _total_zone_min * 100.0, 1)
-
-    hr_zones = {
-        "zone_1_minutes": _zone_mins[0] or None,
-        "zone_1_pct": _zone_pct(_zone_mins[0]),
-        "zone_2_minutes": _zone_mins[1] or None,
-        "zone_2_pct": _zone_pct(_zone_mins[1]),
-        "zone_3_minutes": _zone_mins[2] or None,
-        "zone_3_pct": _zone_pct(_zone_mins[2]),
-        "zone_4_minutes": _zone_mins[3] or None,
-        "zone_4_pct": _zone_pct(_zone_mins[3]),
-        "zone_5_minutes": _zone_mins[4] or None,
-        "zone_5_pct": _zone_pct(_zone_mins[4]),
-    } if _total_zone_min > 0 else {
-        "zone_1_minutes": None, "zone_1_pct": None,
-        "zone_2_minutes": None, "zone_2_pct": None,
-        "zone_3_minutes": None, "zone_3_pct": None,
-        "zone_4_minutes": None, "zone_4_pct": None,
-        "zone_5_minutes": None, "zone_5_pct": None,
-    }
-
     activity_out: dict[str, Any] = {
         "activity_id": activity_id,
-        "timestamp": str(ts) if ts else None,
+        "timestamp": base["timestamp"],
         "activity_name": pick(raw, "activityName", "activity_name", "name"),
         "sport_type": sport,
-        "distance_km": dist_km,
-        "duration_minutes": dur_min,
+        "distance_km": base["distance_km"],
+        "duration_minutes": base["duration_minutes"],
         "moving_duration_minutes": moving_min,
-        "avg_hr": safe_float(pick(raw, "averageHR", "average_hr", "avg_hr")),
-        "max_hr": safe_float(pick(raw, "maxHR", "max_hr")),
-        "avg_speed_kmh": avg_speed_kmh,
+        "avg_hr": base["avg_hr"],
+        "max_hr": base["max_hr"],
+        "avg_speed_kmh": base["avg_speed_kmh"],
         "max_speed_kmh": max_speed_kmh,
-        "calories": safe_int(pick(raw, "calories", "total_calories")),
+        "calories": base["calories"],
+        "avg_pace_min_per_km": base["avg_pace_min_per_km"],
+        "elevation_gain_m": base["elevation_gain_m"],
+        "avg_cadence": base["avg_cadence"],
+        "avg_power": base["avg_power"],
         "lap_count": safe_int(pick(raw, "lapCount", "lap_count")),
         "location": pick(raw, "locationName", "location_name"),
         "description": pick(raw, "description"),
-        "hr_zones": hr_zones,
+        "hr_zones": base["hr_zones"],
         "training_effect": None,
     }
 
-    # -- 2. ActivitySession (training effect) --
-    session_rows = influx.query_activity_session_by_id(activity_id)
+    # -- 2. ActivitySession + ActivityLap (independent, run concurrently) --
+    session_rows, lap_rows = await asyncio.gather(
+        asyncio.to_thread(influx.query_activity_session_by_id, activity_id),
+        asyncio.to_thread(influx.query_activity_laps_by_id, activity_id),
+    )
     if session_rows:
         sess = session_rows[0]
         aerobic = safe_float(sess.get("Aerobic_Training") or sess.get("aerobic_training"))
@@ -153,11 +114,18 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
         if sub_sport:
             activity_out["sub_sport"] = str(sub_sport).lower().strip()
 
-    # -- 3. ActivityLap (splits) --
-    lap_rows = influx.query_activity_laps_by_id(activity_id)
+    # -- 3. Lap normalisation --
     laps = [normalise_lap(r, sport) for r in lap_rows]
 
-    # -- 4. Analysis hints --
+    # -- 4. Backfill cadence/power from laps (not in ActivitySummary) --
+    # Duration-weighted average: a 20-min lap at 90rpm matters more than
+    # a 30-second lap at 60rpm.
+    if laps and activity_out.get("avg_cadence") is None:
+        activity_out["avg_cadence"] = _weighted_avg(laps, "avg_cadence")
+    if laps and activity_out.get("avg_power") is None:
+        activity_out["avg_power"] = _weighted_avg(laps, "avg_power")
+
+    # -- 5. Analysis hints --
     analysis = _compute_analysis_hints(laps)
 
     return {
@@ -165,6 +133,25 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
         "laps": laps if laps else None,
         "analysis_hints": analysis,
     }
+
+
+def _weighted_avg(laps: list[dict], field: str) -> float | None:
+    """
+    Compute a duration-weighted average of *field* across laps.
+    Uses elapsed_time_minutes as weight.  Ignores laps where
+    the field or duration is missing.
+    """
+    total_val = 0.0
+    total_dur = 0.0
+    for lap in laps:
+        val = lap.get(field)
+        dur = lap.get("elapsed_time_minutes")
+        if val is not None and dur is not None and dur > 0:
+            total_val += val * dur
+            total_dur += dur
+    if total_dur <= 0:
+        return None
+    return round(total_val / total_dur, 1)
 
 
 def _compute_analysis_hints(laps: list[dict]) -> dict[str, Any] | None:

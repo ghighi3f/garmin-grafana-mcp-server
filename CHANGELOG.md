@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`get_stress_body_battery_tool`** — new MCP tool for daily stress breakdown
+  and body battery trend over 7–30 days. Returns per-day stress minutes
+  (high/medium/low/rest) and body battery levels (at wake/high/low/drained/charged),
+  plus summary averages and trend direction ("improving"/"declining"/"stable").
+  - New tool module: `tools/stress.py`.
+  - Registered in `server.py` as the 9th MCP tool.
+  - Added to `test_tools.py` integration test.
+
+- **Duration-weighted cadence/power backfill** in `get_activity_details` —
+  `avg_cadence` and `normalized_power` are now computed from ActivityLap data
+  (weighted by lap duration) when ActivitySummary lacks these fields.
+
+### Changed
+
+- **Connection pooling** — `influx.py` now uses lazy thread-safe singletons
+  (double-checked locking) instead of creating a new InfluxDB client on every
+  query. Graceful cleanup via `atexit`. Removes all per-call `client.close()`
+  patterns from `_v1_query`, `_v2_query`, `ping`, `query_field_keys`,
+  `query_tag_keys`, and measurement-list helpers.
+
+- **Async I/O** — all tool functions now wrap synchronous InfluxDB calls in
+  `asyncio.to_thread()` to avoid blocking uvicorn's event loop. Independent
+  queries parallelized with `asyncio.gather()` (fitness trend: 4 queries,
+  activity detail: session+laps, schema: fields+tags, load: resting HR+HRV).
+
+- **DRY refactor of `tools/detail.py`** — replaced ~65 lines of duplicated
+  normalisation logic with a call to `influx.normalise_activity()` for base
+  fields, overlaying detail-only extras (activity name, moving duration, max
+  speed, lap count, location, description). Eliminates field-name candidate
+  drift between the two code paths.
+
+### Fixed
+
+- **Multi-device row deduplication** — garmin-grafana writes one row per paired
+  Garmin device (e.g. Edge 540 + Forerunner 165), causing doubled data. Added
+  `_dedup_rows()` and `_dedup_laps()` helpers in `influx.py` that group rows by
+  timestamp (and lap index for laps), keeping the row with the most populated
+  fields. Applied to `query_activity_summary_by_id`,
+  `query_activity_session_by_id`, `query_activity_laps_by_id`, and
+  `query_daily_stats`.
+
+- **`get_stress_body_battery` now includes today's partial data** — when DailyStats
+  lacks today's row (common before end-of-day sync), the tool synthesises today's
+  entry from `StressIntraday` and `BodyBatteryIntraday` measurements. Stress readings
+  are categorised into Garmin's standard rest/low/medium/high buckets; body battery
+  reports today's high, low, charged, and drained values. Each day now includes a
+  `"source"` field (`"daily_stats"` or `"intraday"`) to distinguish complete vs
+  partial data. `body_battery_at_wake` is `null` for intraday days (requires
+  sleep-tracking context). New env vars: `MEASUREMENT_STRESS_INTRADAY`,
+  `MEASUREMENT_BODY_BATTERY_INTRADAY`, `FIELD_STRESS_LEVEL`,
+  `FIELD_BODY_BATTERY_LEVEL`.
+
 ## [1.0.0] - 2026-03-19
 
 ### Fixed

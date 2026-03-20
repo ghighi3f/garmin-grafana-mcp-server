@@ -6,6 +6,7 @@ Pure data retrieval — no planning logic.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import influx
@@ -27,7 +28,7 @@ async def get_daily_recovery(days: int = 7) -> dict[str, Any]:
     days = max(1, min(days, 14))
 
     try:
-        daily_rows = influx.query_daily_stats(days)
+        daily_rows = await asyncio.to_thread(influx.query_daily_stats, days)
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",
@@ -36,7 +37,7 @@ async def get_daily_recovery(days: int = 7) -> dict[str, Any]:
         }
 
     try:
-        sleep_rows = influx.query_sleep_summary(days)
+        sleep_rows = await asyncio.to_thread(influx.query_sleep_summary, days)
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",

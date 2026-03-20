@@ -6,6 +6,7 @@ at runtime instead of guessing field names.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import influx
@@ -33,7 +34,7 @@ async def explore_schema(measurement_name: str | None = None) -> dict[str, Any]:
     """
     if not measurement_name:
         try:
-            measurements = influx.get_measurements()
+            measurements = await asyncio.to_thread(influx.get_measurements)
         except ConnectionError as exc:
             return {
                 "error": "InfluxDB connection failed",
@@ -51,8 +52,10 @@ async def explore_schema(measurement_name: str | None = None) -> dict[str, Any]:
 
     # Inspect a specific measurement
     try:
-        fields = influx.query_field_keys(measurement_name)
-        tags = influx.query_tag_keys(measurement_name)
+        fields, tags = await asyncio.gather(
+            asyncio.to_thread(influx.query_field_keys, measurement_name),
+            asyncio.to_thread(influx.query_tag_keys, measurement_name),
+        )
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",

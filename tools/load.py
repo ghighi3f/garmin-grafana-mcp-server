@@ -6,6 +6,7 @@ No fitness metrics, no ATL/CTL/TSB — raw numbers only.
 
 from __future__ import annotations
 
+import asyncio
 from collections import defaultdict
 from typing import Any
 
@@ -42,8 +43,8 @@ async def get_weekly_load_summary(weeks: int = 4) -> dict[str, Any]:
 
     # --- Activities ---
     try:
-        rows = influx.query_recent_activities(
-            days=days, sport_type=None, limit=weeks * 50
+        rows = await asyncio.to_thread(
+            influx.query_recent_activities, days, None, weeks * 50
         )
     except ConnectionError as exc:
         return {
@@ -52,8 +53,11 @@ async def get_weekly_load_summary(weeks: int = 4) -> dict[str, Any]:
             "detail": str(exc),
         }
 
-    # --- Resting HR (best-effort, non-fatal) ---
-    rhr_rows = influx.query_resting_hr_weekly(weeks)
+    # --- Resting HR + HRV (best-effort, non-fatal) ---
+    rhr_rows, hrv_rows = await asyncio.gather(
+        asyncio.to_thread(influx.query_resting_hr_weekly, weeks),
+        asyncio.to_thread(influx.query_hrv_weekly, weeks),
+    )
     # Map ISO week label → avg resting HR
     rhr_by_week: dict[str, float | None] = {}
     for r in rhr_rows:
@@ -68,8 +72,7 @@ async def get_weekly_load_summary(weeks: int = 4) -> dict[str, Any]:
             except (TypeError, ValueError):
                 pass
 
-    # --- HRV (best-effort, non-fatal) ---
-    hrv_rows = influx.query_hrv_weekly(weeks)
+    # Map ISO week label → avg HRV
     hrv_by_week: dict[str, float | None] = {}
     for r in hrv_rows:
         ts = r.get("time") or r.get("_time")

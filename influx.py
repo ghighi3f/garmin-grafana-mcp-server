@@ -5,11 +5,21 @@ All InfluxQL / Flux queries live here — never inline in tools.
 
 import os
 import logging
+import threading
+import atexit
+from datetime import datetime, timezone
 from typing import Any
 
 from utils import pick, safe_float, safe_int
 
 logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Connection singletons (lazy, thread-safe)
+# ---------------------------------------------------------------------------
+_client_lock = threading.Lock()
+_v1_singleton: Any = None
+_v2_singleton: Any = None
 
 # ---------------------------------------------------------------------------
 # Config (read once from environment)
@@ -37,6 +47,12 @@ MEASUREMENT_VO2_MAX = os.getenv("MEASUREMENT_VO2_MAX", "VO2_Max")
 MEASUREMENT_RACE_PREDICTIONS = os.getenv("MEASUREMENT_RACE_PREDICTIONS", "RacePredictions")
 MEASUREMENT_BODY_COMPOSITION = os.getenv("MEASUREMENT_BODY_COMPOSITION", "BodyComposition")
 
+# Intraday measurements for live "today" data
+MEASUREMENT_STRESS_INTRADAY = os.getenv("MEASUREMENT_STRESS_INTRADAY", "StressIntraday")
+MEASUREMENT_BODY_BATTERY_INTRADAY = os.getenv("MEASUREMENT_BODY_BATTERY_INTRADAY", "BodyBatteryIntraday")
+FIELD_STRESS_LEVEL = os.getenv("FIELD_STRESS_LEVEL", "stressLevel")
+FIELD_BODY_BATTERY_LEVEL = os.getenv("FIELD_BODY_BATTERY_LEVEL", "BodyBatteryLevel")
+
 # Field names within measurements — override if your schema uses different names
 FIELD_RESTING_HR = os.getenv("FIELD_RESTING_HR", "restingHeartRate")
 FIELD_HRV = os.getenv("FIELD_HRV", "hrvValue")
@@ -58,24 +74,52 @@ FIELD_HR_ZONE_5 = os.getenv("FIELD_HR_ZONE_5", "hrTimeInZone_5")
 # ---------------------------------------------------------------------------
 
 def _v1_client():
-    from influxdb import InfluxDBClient  # type: ignore
-    return InfluxDBClient(
-        host=INFLUXDB_HOST,
-        port=INFLUXDB_PORT,
-        username=INFLUXDB_USERNAME,
-        password=INFLUXDB_PASSWORD,
-        database=INFLUXDB_DATABASE,
-    )
+    """Return the v1 client singleton (lazy, thread-safe)."""
+    global _v1_singleton
+    if _v1_singleton is None:
+        with _client_lock:
+            if _v1_singleton is None:
+                from influxdb import InfluxDBClient  # type: ignore
+                _v1_singleton = InfluxDBClient(
+                    host=INFLUXDB_HOST,
+                    port=INFLUXDB_PORT,
+                    username=INFLUXDB_USERNAME,
+                    password=INFLUXDB_PASSWORD,
+                    database=INFLUXDB_DATABASE,
+                )
+    return _v1_singleton
 
 
 def _v2_client():
-    from influxdb_client import InfluxDBClient  # type: ignore
-    url = f"http://{INFLUXDB_HOST}:{INFLUXDB_PORT}"
-    return InfluxDBClient(url=url, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+    """Return the v2 client singleton (lazy, thread-safe)."""
+    global _v2_singleton
+    if _v2_singleton is None:
+        with _client_lock:
+            if _v2_singleton is None:
+                from influxdb_client import InfluxDBClient  # type: ignore
+                url = f"http://{INFLUXDB_HOST}:{INFLUXDB_PORT}"
+                _v2_singleton = InfluxDBClient(url=url, token=INFLUXDB_TOKEN, org=INFLUXDB_ORG)
+    return _v2_singleton
+
+
+def _close_clients():
+    """Close singleton clients on interpreter shutdown."""
+    global _v1_singleton, _v2_singleton
+    for client in (_v1_singleton, _v2_singleton):
+        if client is not None:
+            try:
+                client.close()
+            except Exception:
+                pass
+    _v1_singleton = None
+    _v2_singleton = None
+
+
+atexit.register(_close_clients)
 
 
 def get_client():
-    """Return the appropriate client based on INFLUXDB_VERSION."""
+    """Return the shared client singleton based on INFLUXDB_VERSION."""
     if INFLUXDB_VERSION == 2:
         return _v2_client()
     return _v1_client()
@@ -299,20 +343,14 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
 
 def _v1_query(q: str) -> list[dict]:
     client = _v1_client()
-    try:
-        result = client.query(q)
-        return list(result.get_points())
-    finally:
-        client.close()
+    result = client.query(q)
+    return list(result.get_points())
 
 
 def _v1_show_measurements() -> list[str]:
     client = _v1_client()
-    try:
-        result = client.query("SHOW MEASUREMENTS")
-        return [p["name"] for p in result.get_points()]
-    finally:
-        client.close()
+    result = client.query("SHOW MEASUREMENTS")
+    return [p["name"] for p in result.get_points()]
 
 
 # ---------------------------------------------------------------------------
@@ -321,16 +359,13 @@ def _v1_show_measurements() -> list[str]:
 
 def _v2_query(q: str) -> list[dict]:
     client = _v2_client()
-    try:
-        qapi = client.query_api()
-        tables = qapi.query(q)
-        rows = []
-        for table in tables:
-            for record in table.records:
-                rows.append(record.values)
-        return rows
-    finally:
-        client.close()
+    qapi = client.query_api()
+    tables = qapi.query(q)
+    rows = []
+    for table in tables:
+        for record in table.records:
+            rows.append(record.values)
+    return rows
 
 
 def _v2_show_measurements() -> list[str]:
@@ -339,16 +374,13 @@ def _v2_show_measurements() -> list[str]:
     schema.measurements(bucket: "{INFLUXDB_DATABASE}")
     '''
     client = _v2_client()
-    try:
-        qapi = client.query_api()
-        tables = qapi.query(q)
-        names = []
-        for table in tables:
-            for record in table.records:
-                names.append(record.get_value())
-        return names
-    finally:
-        client.close()
+    qapi = client.query_api()
+    tables = qapi.query(q)
+    names = []
+    for table in tables:
+        for record in table.records:
+            names.append(record.get_value())
+    return names
 
 
 # ---------------------------------------------------------------------------
@@ -370,13 +402,9 @@ def ping() -> bool:
     """Return True if InfluxDB responds."""
     try:
         if INFLUXDB_VERSION == 2:
-            client = _v2_client()
-            client.health()
-            client.close()
+            _v2_client().health()
         else:
-            client = _v1_client()
-            client.ping()
-            client.close()
+            _v1_client().ping()
         return True
     except Exception:
         return False
@@ -559,7 +587,71 @@ def query_daily_stats(days: int) -> list[dict]:
             raw = _v1_query(q)
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
-    return [normalise_daily_stats(r) for r in raw]
+    return [normalise_daily_stats(r) for r in _dedup_rows(raw)]
+
+
+def query_stress_intraday_today() -> list[dict]:
+    """Return raw StressIntraday readings from UTC midnight today to now.
+
+    Returns [] silently if the measurement doesn't exist or has no data.
+    """
+    today_start = (
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: {today_start})
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_STRESS_INTRADAY}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: false)
+            '''
+            return _dedup_rows(_v2_query(q))
+        else:
+            q = (
+                f'SELECT * FROM "{MEASUREMENT_STRESS_INTRADAY}" '
+                f"WHERE time >= '{today_start}' "
+                f"ORDER BY time ASC"
+            )
+            return _dedup_rows(_v1_query(q))
+    except Exception as exc:
+        logger.debug("StressIntraday query failed (non-fatal): %s", exc)
+        return []
+
+
+def query_body_battery_intraday_today() -> list[dict]:
+    """Return raw BodyBatteryIntraday readings from UTC midnight today to now.
+
+    Returns [] silently if the measurement doesn't exist or has no data.
+    """
+    today_start = (
+        datetime.now(timezone.utc)
+        .replace(hour=0, minute=0, second=0, microsecond=0)
+        .strftime("%Y-%m-%dT%H:%M:%SZ")
+    )
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: {today_start})
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_BODY_BATTERY_INTRADAY}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: false)
+            '''
+            return _dedup_rows(_v2_query(q))
+        else:
+            q = (
+                f'SELECT * FROM "{MEASUREMENT_BODY_BATTERY_INTRADAY}" '
+                f"WHERE time >= '{today_start}' "
+                f"ORDER BY time ASC"
+            )
+            return _dedup_rows(_v1_query(q))
+    except Exception as exc:
+        logger.debug("BodyBatteryIntraday query failed (non-fatal): %s", exc)
+        return []
 
 
 def query_sleep_summary(days: int) -> list[dict]:
@@ -589,6 +681,45 @@ def query_sleep_summary(days: int) -> list[dict]:
     return [normalise_sleep(r) for r in raw]
 
 
+def _non_null_count(row: dict) -> int:
+    """Count non-None, non-empty values (ignoring tag/meta keys)."""
+    _SKIP = {"time", "_time", "Device", "Database_Name", "ActivitySelector", "ActivityID"}
+    return sum(1 for k, v in row.items() if k not in _SKIP and v is not None and v != "")
+
+
+def _dedup_rows(rows: list[dict], key: str = "time") -> list[dict]:
+    """
+    Remove duplicate rows caused by garmin-grafana writing one row per
+    device (e.g. Edge 540 + Forerunner 165).  When duplicates exist,
+    keeps the row with the most populated fields.
+    """
+    groups: dict[Any, list[dict]] = {}
+    for r in rows:
+        k = r.get(key)
+        groups.setdefault(k, []).append(r)
+    out: list[dict] = []
+    for group in groups.values():
+        best = max(group, key=_non_null_count) if len(group) > 1 else group[0]
+        out.append(best)
+    return out
+
+
+def _dedup_laps(rows: list[dict]) -> list[dict]:
+    """
+    Remove duplicate lap rows using (time, Index) as composite key.
+    Keeps the row with the most populated fields.
+    """
+    groups: dict[Any, list[dict]] = {}
+    for r in rows:
+        k = (r.get("time") or r.get("_time"), r.get("Index"))
+        groups.setdefault(k, []).append(r)
+    out: list[dict] = []
+    for group in groups.values():
+        best = max(group, key=_non_null_count) if len(group) > 1 else group[0]
+        out.append(best)
+    return out
+
+
 def query_activity_summary_by_id(activity_id: str) -> list[dict]:
     """
     Return raw ActivitySummary rows for a specific activity ID.
@@ -603,7 +734,7 @@ def query_activity_summary_by_id(activity_id: str) -> list[dict]:
           |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
         try:
-            return _v2_query(q)
+            return _dedup_rows(_v2_query(q))
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
     else:
@@ -612,7 +743,7 @@ def query_activity_summary_by_id(activity_id: str) -> list[dict]:
             f"WHERE \"ActivityID\" = '{activity_id}'"
         )
         try:
-            return _v1_query(q)
+            return _dedup_rows(_v1_query(q))
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
 
@@ -631,13 +762,13 @@ def query_activity_session_by_id(activity_id: str) -> list[dict]:
               |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
               |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
             '''
-            return _v2_query(q)
+            return _dedup_rows(_v2_query(q))
         else:
             q = (
                 f'SELECT * FROM "{MEASUREMENT_ACTIVITY_SESSION}" '
                 f"WHERE \"ActivityID\" = '{activity_id}'"
             )
-            return _v1_query(q)
+            return _dedup_rows(_v1_query(q))
     except Exception as exc:
         logger.debug("ActivitySession query failed (non-fatal): %s", exc)
         return []
@@ -658,14 +789,14 @@ def query_activity_laps_by_id(activity_id: str) -> list[dict]:
               |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
               |> sort(columns: ["_time"], desc: false)
             '''
-            return _v2_query(q)
+            return _dedup_laps(_v2_query(q))
         else:
             q = (
                 f'SELECT * FROM "{MEASUREMENT_ACTIVITY_LAP}" '
                 f"WHERE \"ActivityID\" = '{activity_id}' "
                 f"ORDER BY time ASC"
             )
-            return _v1_query(q)
+            return _dedup_laps(_v1_query(q))
     except Exception as exc:
         logger.debug("ActivityLap query failed (non-fatal): %s", exc)
         return []
@@ -768,31 +899,23 @@ def query_field_keys(measurement: str) -> list[dict[str, str]]:
                 measurement: "{measurement}",
             )
             '''
-            client = _v2_client()
-            try:
-                tables = client.query_api().query(q)
-                fields = []
-                for table in tables:
-                    for record in table.records:
-                        fields.append({
-                            "field": record.get_value(),
-                            "type": record.values.get("type", "unknown"),
-                        })
-                return fields
-            finally:
-                client.close()
+            tables = _v2_client().query_api().query(q)
+            fields = []
+            for table in tables:
+                for record in table.records:
+                    fields.append({
+                        "field": record.get_value(),
+                        "type": record.values.get("type", "unknown"),
+                    })
+            return fields
         else:
-            client = _v1_client()
-            try:
-                result = client.query(
-                    f'SHOW FIELD KEYS FROM "{measurement}"'
-                )
-                return [
-                    {"field": p["fieldKey"], "type": p.get("fieldType", "unknown")}
-                    for p in result.get_points()
-                ]
-            finally:
-                client.close()
+            result = _v1_client().query(
+                f'SHOW FIELD KEYS FROM "{measurement}"'
+            )
+            return [
+                {"field": p["fieldKey"], "type": p.get("fieldType", "unknown")}
+                for p in result.get_points()
+            ]
     except Exception as exc:
         logger.warning("Could not get field keys for %s: %s", measurement, exc)
         return []
@@ -812,28 +935,19 @@ def query_tag_keys(measurement: str) -> list[str]:
                 measurement: "{measurement}",
             )
             '''
-            client = _v2_client()
-            try:
-                tables = client.query_api().query(q)
-                tags = []
-                for table in tables:
-                    for record in table.records:
-                        val = record.get_value()
-                        # Skip internal Flux tags
-                        if not val.startswith("_"):
-                            tags.append(val)
-                return tags
-            finally:
-                client.close()
+            tables = _v2_client().query_api().query(q)
+            tags = []
+            for table in tables:
+                for record in table.records:
+                    val = record.get_value()
+                    if not val.startswith("_"):
+                        tags.append(val)
+            return tags
         else:
-            client = _v1_client()
-            try:
-                result = client.query(
-                    f'SHOW TAG KEYS FROM "{measurement}"'
-                )
-                return [p["tagKey"] for p in result.get_points()]
-            finally:
-                client.close()
+            result = _v1_client().query(
+                f'SHOW TAG KEYS FROM "{measurement}"'
+            )
+            return [p["tagKey"] for p in result.get_points()]
     except Exception as exc:
         logger.warning("Could not get tag keys for %s: %s", measurement, exc)
         return []

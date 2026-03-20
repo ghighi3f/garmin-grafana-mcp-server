@@ -365,6 +365,18 @@ Discover available InfluxDB measurements, fields, and tags at runtime. Useful fo
 }
 ```
 
+### `get_stress_body_battery`
+
+Daily stress breakdown and body battery trend over 7–30 days. Surfaces systemic fatigue patterns that `get_daily_recovery` buries inside a per-day blob.
+
+| Parameter | Type | Default | Range |
+|---|---|---|---|
+| `days` | int | `7` | 7–30 |
+
+**Returns:**
+- Per-day: stress minutes (high/medium/low/rest) + body battery (at wake, high, low, drained, charged)
+- Summary: period averages + trend direction (`"improving"` / `"declining"` / `"stable"` for body battery; `"improving"` / `"worsening"` / `"stable"` for stress)
+
 ---
 
 ## Example prompts
@@ -385,6 +397,9 @@ Discover available InfluxDB measurements, fields, and tags at runtime. Useful fo
 
 "What's my HR zone distribution for the past month?
  Am I spending too much time in zone 3?"
+
+"Show my stress and body battery trend for the last 2 weeks.
+ Am I recovering well between hard sessions?"
 ```
 
 ---
@@ -448,7 +463,9 @@ garmin-grafana-mcp-server/
 │   ├── load.py            — get_weekly_load_summary
 │   ├── recovery.py        — get_daily_recovery
 │   ├── detail.py          — get_activity_details
-│   └── fitness.py         — get_fitness_trend, get_training_zones
+│   ├── fitness.py         — get_fitness_trend, get_training_zones
+│   ├── stress.py          — get_stress_body_battery
+│   └── schema.py          — explore_schema
 ├── Dockerfile
 ├── docker-compose.yml     — Docker deployment (external garmin-grafana network)
 ├── .env.example           — Configuration template

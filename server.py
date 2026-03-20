@@ -1,7 +1,7 @@
 """
 Garmin MCP Server — data access layer for garmin-grafana InfluxDB.
 
-Exposes eight MCP tools over HTTP (streamable-HTTP transport):
+Exposes nine MCP tools over HTTP (streamable-HTTP transport):
   • get_last_activity
   • get_recent_activities
   • get_weekly_load_summary
@@ -10,6 +10,7 @@ Exposes eight MCP tools over HTTP (streamable-HTTP transport):
   • get_fitness_trend
   • get_training_zones
   • explore_schema
+  • get_stress_body_battery
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -19,6 +20,7 @@ from __future__ import annotations
 import os
 import sys
 import logging
+import asyncio
 
 from dotenv import load_dotenv
 
@@ -47,6 +49,7 @@ from tools.recovery import get_daily_recovery  # noqa: E402
 from tools.detail import get_activity_details  # noqa: E402
 from tools.fitness import get_fitness_trend, get_training_zones  # noqa: E402
 from tools.schema import explore_schema  # noqa: E402
+from tools.stress import get_stress_body_battery  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -298,6 +301,31 @@ async def explore_schema_tool(measurement_name: str | None = None) -> dict:
     return await explore_schema(measurement_name=measurement_name)
 
 
+@mcp.tool()
+async def get_stress_body_battery_tool(days: int = 7) -> dict:
+    """
+    Return daily stress breakdown and body battery trend.
+
+    Parameters
+    ----------
+    days : int
+        Look-back window in days.  Range: 7–30.  Default: 7.
+
+    Returns
+    -------
+    days : list
+        One entry per date (newest first), each containing:
+        - stress       : high_min, medium_min, low_min, rest_min,
+                         total_stress_min
+        - body_battery : at_wake, high, low, drained, charged
+    summary
+        Period averages and trend direction for body battery
+        ("improving" / "declining" / "stable") and stress
+        ("improving" / "worsening" / "stable").
+    """
+    return await get_stress_body_battery(days=days)
+
+
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
@@ -334,16 +362,16 @@ async def health_check():
     Returns InfluxDB connectivity status, last recorded activity timestamp,
     available measurements, and the MCP endpoint URL.
     """
-    connected = influx.ping()
+    connected = await asyncio.to_thread(influx.ping)
     influx_status = "connected" if connected else "unreachable"
 
     last_ts = None
     measurements: list[str] = []
 
     if connected:
-        measurements = influx.get_measurements()
+        measurements = await asyncio.to_thread(influx.get_measurements)
         try:
-            last = influx.query_last_activity()
+            last = await asyncio.to_thread(influx.query_last_activity)
             if last:
                 last_ts = last.get("timestamp")
         except Exception:

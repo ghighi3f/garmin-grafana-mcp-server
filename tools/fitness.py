@@ -5,6 +5,7 @@ Pure data retrieval — no planning logic.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import influx
@@ -56,10 +57,12 @@ async def get_fitness_trend(weeks: int = 12) -> dict[str, Any]:
     weeks = max(4, min(weeks, 52))
 
     # All non-fatal individually
-    vo2_rows = influx.query_vo2max_weekly(weeks)
-    race_rows = influx.query_race_predictions_weekly(weeks)
-    weight_rows = influx.query_weight_weekly(weeks)
-    rhr_rows = influx.query_resting_hr_weekly(weeks)
+    vo2_rows, race_rows, weight_rows, rhr_rows = await asyncio.gather(
+        asyncio.to_thread(influx.query_vo2max_weekly, weeks),
+        asyncio.to_thread(influx.query_race_predictions_weekly, weeks),
+        asyncio.to_thread(influx.query_weight_weekly, weeks),
+        asyncio.to_thread(influx.query_resting_hr_weekly, weeks),
+    )
 
     # -- Index each by ISO week --
     vo2_by_week = _index_by_week(vo2_rows, lambda r: {
@@ -193,7 +196,7 @@ async def get_training_zones(days: int = 30, sport_type: str = "all") -> dict[st
         sport_type = "all"
 
     try:
-        raw_rows = influx.query_activity_hr_zones(days=days, limit=days * 5)
+        raw_rows = await asyncio.to_thread(influx.query_activity_hr_zones, days, days * 5)
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",

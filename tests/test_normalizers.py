@@ -15,6 +15,11 @@ from influx import (
     normalise_lap,
 )
 from utils import pick, safe_float, safe_int, iso_week_label, week_start_from_label
+from tools.stress import (
+    _aggregate_stress_intraday,
+    _aggregate_body_battery_intraday,
+    _synthesize_today_row,
+)
 
 
 # ===================================================================
@@ -421,3 +426,163 @@ class TestNormaliseLap:
         result = normalise_lap(row)
         assert result["index"] == 2
         assert result["avg_hr"] == 145.0
+
+
+# ===================================================================
+# Stress intraday aggregation helpers
+# ===================================================================
+
+class TestAggregateStressIntraday:
+    """Tests for _aggregate_stress_intraday from tools/stress.py."""
+
+    def test_all_buckets(self):
+        rows = [
+            {"stressLevel": 10},   # rest
+            {"stressLevel": 40},   # low
+            {"stressLevel": 60},   # medium
+            {"stressLevel": 85},   # high
+        ]
+        result = _aggregate_stress_intraday(rows)
+        assert result is not None
+        assert result["rest_min"] == 3.0
+        assert result["low_min"] == 3.0
+        assert result["medium_min"] == 3.0
+        assert result["high_min"] == 3.0
+
+    def test_boundary_values(self):
+        """Test exact boundary values between buckets."""
+        rows = [
+            {"stressLevel": 25},   # rest (upper bound)
+            {"stressLevel": 26},   # low (lower bound)
+            {"stressLevel": 50},   # low (upper bound)
+            {"stressLevel": 51},   # medium (lower bound)
+            {"stressLevel": 75},   # medium (upper bound)
+            {"stressLevel": 76},   # high (lower bound)
+            {"stressLevel": 100},  # high (upper bound)
+        ]
+        result = _aggregate_stress_intraday(rows)
+        assert result["rest_min"] == 3.0      # 1 reading
+        assert result["low_min"] == 6.0       # 2 readings
+        assert result["medium_min"] == 6.0    # 2 readings
+        assert result["high_min"] == 6.0      # 2 readings
+
+    def test_skips_negative_and_zero(self):
+        rows = [
+            {"stressLevel": -1},
+            {"stressLevel": 0},
+            {"stressLevel": -2},
+            {"stressLevel": 50},   # low
+        ]
+        result = _aggregate_stress_intraday(rows)
+        assert result is not None
+        assert result["low_min"] == 3.0
+        assert result["rest_min"] == 0.0
+        assert result["high_min"] == 0.0
+
+    def test_empty_rows(self):
+        assert _aggregate_stress_intraday([]) is None
+
+    def test_all_unmeasured(self):
+        rows = [{"stressLevel": -1}, {"stressLevel": 0}]
+        assert _aggregate_stress_intraday(rows) is None
+
+    def test_missing_field(self):
+        rows = [{"other_field": 42}]
+        assert _aggregate_stress_intraday(rows) is None
+
+
+class TestAggregateBodyBatteryIntraday:
+    """Tests for _aggregate_body_battery_intraday from tools/stress.py."""
+
+    def test_high_low(self):
+        rows = [
+            {"BodyBatteryLevel": 80},
+            {"BodyBatteryLevel": 65},
+            {"BodyBatteryLevel": 50},
+            {"BodyBatteryLevel": 55},
+        ]
+        result = _aggregate_body_battery_intraday(rows)
+        assert result is not None
+        assert result["high"] == 80
+        assert result["low"] == 50
+        assert result["at_wake"] is None
+
+    def test_charged_drained(self):
+        rows = [
+            {"BodyBatteryLevel": 80},   # start
+            {"BodyBatteryLevel": 65},   # -15 drained
+            {"BodyBatteryLevel": 70},   # +5  charged
+            {"BodyBatteryLevel": 50},   # -20 drained
+        ]
+        result = _aggregate_body_battery_intraday(rows)
+        assert result["drained"] == 35   # 15 + 20
+        assert result["charged"] == 5
+
+    def test_only_draining(self):
+        rows = [
+            {"BodyBatteryLevel": 90},
+            {"BodyBatteryLevel": 80},
+            {"BodyBatteryLevel": 70},
+        ]
+        result = _aggregate_body_battery_intraday(rows)
+        assert result["drained"] == 20
+        assert result["charged"] is None
+
+    def test_only_charging(self):
+        rows = [
+            {"BodyBatteryLevel": 50},
+            {"BodyBatteryLevel": 60},
+            {"BodyBatteryLevel": 70},
+        ]
+        result = _aggregate_body_battery_intraday(rows)
+        assert result["charged"] == 20
+        assert result["drained"] is None
+
+    def test_empty_rows(self):
+        assert _aggregate_body_battery_intraday([]) is None
+
+    def test_zero_values_skipped(self):
+        rows = [{"BodyBatteryLevel": 0}]
+        assert _aggregate_body_battery_intraday(rows) is None
+
+    def test_single_reading(self):
+        rows = [{"BodyBatteryLevel": 75}]
+        result = _aggregate_body_battery_intraday(rows)
+        assert result["high"] == 75
+        assert result["low"] == 75
+        assert result["charged"] is None
+        assert result["drained"] is None
+
+
+class TestSynthesizeTodayRow:
+    """Tests for _synthesize_today_row from tools/stress.py."""
+
+    def test_no_data_returns_none(self):
+        assert _synthesize_today_row("2026-03-20", [], []) is None
+
+    def test_stress_only(self):
+        stress = [{"stressLevel": 80}]
+        result = _synthesize_today_row("2026-03-20", stress, [])
+        assert result is not None
+        assert result["date"] == "2026-03-20"
+        assert result["stress_high_min"] == 3.0
+        assert result["body_battery_high"] is None
+
+    def test_body_battery_only(self):
+        bb = [{"BodyBatteryLevel": 75}, {"BodyBatteryLevel": 60}]
+        result = _synthesize_today_row("2026-03-20", [], bb)
+        assert result is not None
+        assert result["date"] == "2026-03-20"
+        assert result["stress_high_min"] is None
+        assert result["body_battery_high"] == 75
+        assert result["body_battery_low"] == 60
+
+    def test_both_sources(self):
+        stress = [{"stressLevel": 30}, {"stressLevel": 80}]
+        bb = [{"BodyBatteryLevel": 90}, {"BodyBatteryLevel": 70}]
+        result = _synthesize_today_row("2026-03-20", stress, bb)
+        assert result is not None
+        assert result["stress_low_min"] == 3.0
+        assert result["stress_high_min"] == 3.0
+        assert result["body_battery_high"] == 90
+        assert result["body_battery_at_wake"] is None

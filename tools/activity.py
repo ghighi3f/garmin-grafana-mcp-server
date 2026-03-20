@@ -5,6 +5,7 @@ Pure data retrieval — no planning logic, no goal assumptions.
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 import influx
@@ -24,7 +25,7 @@ async def get_last_activity() -> dict[str, Any]:
         elevation_gain_m, avg_cadence, normalized_power
     """
     try:
-        activity = influx.query_last_activity()
+        activity = await asyncio.to_thread(influx.query_last_activity)
     except ConnectionError as exc:
         return {
             "error": "InfluxDB connection failed",
@@ -70,10 +71,11 @@ async def get_recent_activities(
         sport_type = "all"
 
     try:
-        rows = influx.query_recent_activities(
-            days=days,
-            sport_type=sport_type if sport_type != "all" else None,
-            limit=limit,
+        rows = await asyncio.to_thread(
+            influx.query_recent_activities,
+            days,
+            sport_type if sport_type != "all" else None,
+            limit,
         )
     except ConnectionError as exc:
         return {

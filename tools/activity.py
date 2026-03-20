@@ -22,7 +22,7 @@ async def get_last_activity() -> dict[str, Any]:
     Fields returned (null when not recorded or unavailable):
         timestamp, sport_type, distance_km, duration_minutes,
         avg_hr, max_hr, calories, avg_pace_min_per_km, avg_speed_kmh,
-        elevation_gain_m, avg_cadence, normalized_power
+        elevation_gain_m, avg_cadence, avg_power
     """
     try:
         activity = await asyncio.to_thread(influx.query_last_activity)

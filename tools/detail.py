@@ -89,7 +89,7 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
         "avg_pace_min_per_km": base["avg_pace_min_per_km"],
         "elevation_gain_m": base["elevation_gain_m"],
         "avg_cadence": base["avg_cadence"],
-        "normalized_power": base["normalized_power"],
+        "avg_power": base["avg_power"],
         "lap_count": safe_int(pick(raw, "lapCount", "lap_count")),
         "location": pick(raw, "locationName", "location_name"),
         "description": pick(raw, "description"),
@@ -122,8 +122,8 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
     # a 30-second lap at 60rpm.
     if laps and activity_out.get("avg_cadence") is None:
         activity_out["avg_cadence"] = _weighted_avg(laps, "avg_cadence")
-    if laps and activity_out.get("normalized_power") is None:
-        activity_out["normalized_power"] = _weighted_avg(laps, "avg_power")
+    if laps and activity_out.get("avg_power") is None:
+        activity_out["avg_power"] = _weighted_avg(laps, "avg_power")
 
     # -- 5. Analysis hints --
     analysis = _compute_analysis_hints(laps)

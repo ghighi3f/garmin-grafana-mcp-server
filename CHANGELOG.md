@@ -31,6 +31,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Unit conversion heuristics removed** — `normalise_activity()` and
+  `normalise_lap()` had heuristics that treated small raw values as "already
+  converted" (distance < 500 → assumed km, duration < 300 → assumed minutes).
+  Since garmin-grafana always stores distance in metres and duration in seconds,
+  short activities (e.g. a 230-metre ride) were reported with wildly inflated
+  values (230 km). Conversions are now unconditional: always divide by 1000 for
+  distance, always divide by 60 for duration.
+
+- **`longest_duration` personal record used elapsed time instead of moving time**
+  — paused activities (e.g. a ride with a 12-hour cafe stop) inflated the record.
+  Now uses `moving_duration_minutes` (from `movingDuration`) which excludes pauses.
+
 - **Walk and hiking activities now correctly suppress speed** —
   `normalise_activity()` had an inconsistency where walk/hiking got
   pace (min/km) but also kept speed (km/h). Now uses the unified
@@ -54,6 +66,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`get_personal_records_tool`** — new MCP tool for all-time personal records
+  per sport type. Uses a full scan of ActivitySummary with Python-side
+  aggregation to find the best value for each metric (longest distance, longest
+  duration, fastest pace/speed, top speed, highest HR, most calories, highest
+  avg power) along with the **activity_id, date, and activity_name** of the
+  record-setting activity. Pace/speed convention follows `PACE_SPORTS` (pace
+  for running/swimming/walking/hiking, speed for cycling and other sports).
+  - New query function in `influx.py`: `query_all_activities()`.
+  - New tool module: `tools/records.py`.
+  - Registered in `server.py` as the 10th MCP tool.
+  - Added to `test_tools.py` integration test and `tests/test_normalizers.py`
+    unit tests.
+
+- **`moving_duration_minutes` field** added to `normalise_activity()` output —
+  extracted from `movingDuration` / `moving_duration` in ActivitySummary.
+  Represents actual moving time excluding pauses. All activity-level tool
+  responses now include moving duration alongside elapsed duration.
+
+- **Power/cadence backfill in `get_personal_records`** — `query_all_activities()`
+  now bulk-fetches `Avg_Power` and `Avg_Cadence` from ActivityLap and computes
+  duration-weighted averages per activity. Activities with power meter data (e.g.
+  indoor trainer) now have `avg_power` and `avg_cadence` populated even
+  though ActivitySummary lacks these fields. Adds `highest_avg_power` (watts)
+  as a personal record metric.
+
+- **`highest_max_power` personal record** — peak instantaneous power (watts) tracked
+  across all activities via a server-side `MAX("Power")` aggregate on `ActivityGPS`.
+  Lightweight: returns one row per activity, no raw samples transferred to Python.
+
+- **`max_speed_kmh` field** added to `normalise_activity()` output — extracted
+  from `maxSpeed` / `max_speed` / `enhanced_max_speed` in ActivitySummary.
+  All activity-level tool responses now include top speed.
+
+- **`activity_name` field** added to `normalise_activity()` output — extracted
+  from `activityName` / `activity_name` / `name` in ActivitySummary.
+
 - **`get_stress_body_battery_tool`** — new MCP tool for daily stress breakdown
   and body battery trend over 7–30 days. Returns per-day stress minutes
   (high/medium/low/rest) and body battery levels (at wake/high/low/drained/charged),
@@ -63,7 +111,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Added to `test_tools.py` integration test.
 
 - **Duration-weighted cadence/power backfill** in `get_activity_details` —
-  `avg_cadence` and `normalized_power` are now computed from ActivityLap data
+  `avg_cadence` and `avg_power` are now computed from ActivityLap data
   (weighted by lap duration) when ActivitySummary lacks these fields.
 
 ### Changed

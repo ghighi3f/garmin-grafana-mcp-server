@@ -50,6 +50,7 @@ from tools.detail import get_activity_details  # noqa: E402
 from tools.fitness import get_fitness_trend, get_training_zones  # noqa: E402
 from tools.schema import explore_schema  # noqa: E402
 from tools.stress import get_stress_body_battery  # noqa: E402
+from tools.records import get_personal_records  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -96,7 +97,13 @@ async def get_last_activity_tool() -> dict:
     Returns fields: timestamp, sport_type, distance_km, duration_minutes,
     avg_hr, max_hr, calories, avg_pace_min_per_km (runs/swims),
     avg_speed_kmh (cycling/other), elevation_gain_m, avg_cadence,
-    normalized_power.  Fields not recorded by Garmin show as null.
+    avg_power.  Fields not recorded by Garmin show as null.
+
+    Power note: only avg_power (duration-weighted average from lap data) is
+    available.  Normalized Power (NP) cannot be queried or calculated — the
+    upstream database does not store the required second-by-second data in a
+    form that can be aggregated without crashing the server.  Do not attempt
+    to compute or estimate NP.
     """
     return await get_last_activity()
 
@@ -329,6 +336,44 @@ async def get_stress_body_battery_tool(days: int = 7) -> dict:
         ("improving" / "worsening" / "stable").
     """
     return await get_stress_body_battery(days=days)
+
+
+@mcp.tool()
+async def get_personal_records_tool(sport_type: str = "all") -> dict:
+    """
+    Return all-time personal records (best metrics) grouped by sport type.
+
+    Uses a full scan of ActivitySummary to find the best value for each
+    metric, along with the activity_id, date, and activity_name of the
+    record-setting activity.
+
+    Parameters
+    ----------
+    sport_type : str
+        Filter by sport.  Any valid Garmin sport type string
+        (e.g. "running", "cycling", "swimming", "hiking",
+        "trail_running").  Supports partial matching for sub-sports.
+        Use "all" to get records for every sport.  Default: "all".
+
+    Returns
+    -------
+    records_by_sport
+        Dict keyed by sport type, each containing records with:
+        - longest_distance, longest_duration, top_speed,
+          highest_max_hr, highest_avg_hr, most_calories,
+          highest_avg_power, highest_max_power
+        - fastest_avg_pace (pace sports) or fastest_avg_speed (speed sports)
+        Each record has: value, unit, activity_id, date, activity_name.
+    summary
+        total_sports, total_activities, sport_list.
+
+    Power limitation: only avg_power (duration-weighted lap average) and
+    max_power (peak watt from ActivityGPS) are available.  Normalized Power
+    (NP) is impossible to calculate — do not attempt to query, compute, or
+    estimate it.  The database does not expose the necessary data without
+    transferring millions of raw samples, which will crash the server.
+    """
+    return await get_personal_records(sport_type=sport_type)
 
 
 # ---------------------------------------------------------------------------

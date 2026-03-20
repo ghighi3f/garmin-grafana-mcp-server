@@ -54,6 +54,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`get_personal_records_tool`** — new MCP tool for all-time personal records
+  per sport type. Uses a full scan of ActivitySummary with Python-side
+  aggregation to find the best value for each metric (longest distance, longest
+  duration, fastest pace/speed, top speed, highest HR, most calories) along with
+  the **activity_id, date, and activity_name** of the record-setting activity.
+  Pace/speed convention follows `PACE_SPORTS` (pace for running/swimming/walking/
+  hiking, speed for cycling and other sports).
+  - New query function in `influx.py`: `query_all_activities()`.
+  - New tool module: `tools/records.py`.
+  - Registered in `server.py` as the 10th MCP tool.
+  - Added to `test_tools.py` integration test and `tests/test_normalizers.py`
+    unit tests.
+
+- **`max_speed_kmh` field** added to `normalise_activity()` output — extracted
+  from `maxSpeed` / `max_speed` / `enhanced_max_speed` in ActivitySummary.
+  All activity-level tool responses now include top speed.
+
+- **`activity_name` field** added to `normalise_activity()` output — extracted
+  from `activityName` / `activity_name` / `name` in ActivitySummary.
+
 - **`get_stress_body_battery_tool`** — new MCP tool for daily stress breakdown
   and body battery trend over 7–30 days. Returns per-day stress minutes
   (high/medium/low/rest) and body battery levels (at wake/high/low/drained/charged),

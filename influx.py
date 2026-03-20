@@ -196,6 +196,11 @@ def normalise_activity(row: dict) -> dict:
         round(avg_speed_raw, 2) if avg_speed_raw else None
     )
 
+    max_speed_raw = safe_float(pick(row, "maxSpeed", "max_speed", "enhanced_max_speed"))
+    max_speed_kmh = round(max_speed_raw * 3.6, 2) if max_speed_raw and max_speed_raw < 100 else (
+        round(max_speed_raw, 2) if max_speed_raw else None
+    )
+
     # Pace (min/km) for run/swim/walk/hike; speed (km/h) for cycling/row/etc.
     if avg_speed_kmh and avg_speed_kmh > 0:
         avg_pace = round(60.0 / avg_speed_kmh, 2) if sport in PACE_SPORTS else None
@@ -229,6 +234,7 @@ def normalise_activity(row: dict) -> dict:
     } if _total_zone_min > 0 else None
 
     activity_id = pick(row, "Activity_ID", "ActivityID", "activity_id", "activityId")
+    activity_name = pick(row, "activityName", "activity_name", "name")
 
     ts = row.get("time") or row.get("timestamp")
     if ts and hasattr(ts, "isoformat"):
@@ -237,6 +243,7 @@ def normalise_activity(row: dict) -> dict:
     return {
         "activity_id": activity_id,
         "timestamp": ts,
+        "activity_name": activity_name,
         "sport_type": sport,
         "distance_km": distance_km,
         "duration_minutes": duration_minutes,
@@ -245,6 +252,7 @@ def normalise_activity(row: dict) -> dict:
         "calories": calories,
         "avg_pace_min_per_km": avg_pace,
         "avg_speed_kmh": avg_speed_out,
+        "max_speed_kmh": max_speed_kmh,
         "elevation_gain_m": elev,
         "avg_cadence": cadence,
         "normalized_power": np_val,
@@ -1015,3 +1023,37 @@ def query_activity_hr_zones(days: int, limit: int) -> list[dict]:
             return _v1_query(q)
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
+
+
+def query_all_activities() -> list[dict]:
+    """
+    Return ALL activities from ActivitySummary (no time/limit filter),
+    deduplicated and normalised.  Used for personal records computation.
+    """
+    if INFLUXDB_VERSION == 2:
+        q = f'''
+        from(bucket: "{INFLUXDB_DATABASE}")
+          |> range(start: -3650d)
+          |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITIES}")
+          |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+          |> sort(columns: ["_time"], desc: true)
+        '''
+        try:
+            raw_rows = _v2_query(q)
+        except Exception as exc:
+            raise ConnectionError(str(exc)) from exc
+    else:
+        q = (
+            f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '
+            f'ORDER BY time DESC'
+        )
+        try:
+            raw_rows = _v1_query(q)
+        except Exception as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    deduped = _dedup_rows(raw_rows)
+    return [
+        a for a in (normalise_activity(r) for r in deduped)
+        if a.get("sport_type") != "no activity"
+    ]

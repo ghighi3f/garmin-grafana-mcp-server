@@ -50,6 +50,7 @@ from tools.detail import get_activity_details  # noqa: E402
 from tools.fitness import get_fitness_trend, get_training_zones  # noqa: E402
 from tools.schema import explore_schema  # noqa: E402
 from tools.stress import get_stress_body_battery  # noqa: E402
+from tools.records import get_personal_records  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -329,6 +330,37 @@ async def get_stress_body_battery_tool(days: int = 7) -> dict:
         ("improving" / "worsening" / "stable").
     """
     return await get_stress_body_battery(days=days)
+
+
+@mcp.tool()
+async def get_personal_records_tool(sport_type: str = "all") -> dict:
+    """
+    Return all-time personal records (best metrics) grouped by sport type.
+
+    Uses a full scan of ActivitySummary to find the best value for each
+    metric, along with the activity_id, date, and activity_name of the
+    record-setting activity.
+
+    Parameters
+    ----------
+    sport_type : str
+        Filter by sport.  Any valid Garmin sport type string
+        (e.g. "running", "cycling", "swimming", "hiking",
+        "trail_running").  Supports partial matching for sub-sports.
+        Use "all" to get records for every sport.  Default: "all".
+
+    Returns
+    -------
+    records_by_sport
+        Dict keyed by sport type, each containing records with:
+        - longest_distance, longest_duration, top_speed,
+          highest_max_hr, highest_avg_hr, most_calories
+        - fastest_avg_pace (pace sports) or fastest_avg_speed (speed sports)
+        Each record has: value, unit, activity_id, date, activity_name.
+    summary
+        total_sports, total_activities, sport_list.
+    """
+    return await get_personal_records(sport_type=sport_type)
 
 
 # ---------------------------------------------------------------------------

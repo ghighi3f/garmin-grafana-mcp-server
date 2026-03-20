@@ -44,6 +44,7 @@ MEASUREMENT_DAILY_STATS = os.getenv("MEASUREMENT_DAILY_STATS", "DailyStats")
 MEASUREMENT_SLEEP_SUMMARY = os.getenv("MEASUREMENT_SLEEP_SUMMARY", "SleepSummary")
 MEASUREMENT_ACTIVITY_SESSION = os.getenv("MEASUREMENT_ACTIVITY_SESSION", "ActivitySession")
 MEASUREMENT_ACTIVITY_LAP = os.getenv("MEASUREMENT_ACTIVITY_LAP", "ActivityLap")
+MEASUREMENT_ACTIVITY_GPS = os.getenv("MEASUREMENT_ACTIVITY_GPS", "ActivityGPS")
 MEASUREMENT_VO2_MAX = os.getenv("MEASUREMENT_VO2_MAX", "VO2_Max")
 MEASUREMENT_RACE_PREDICTIONS = os.getenv("MEASUREMENT_RACE_PREDICTIONS", "RacePredictions")
 MEASUREMENT_BODY_COMPOSITION = os.getenv("MEASUREMENT_BODY_COMPOSITION", "BodyComposition")
@@ -160,19 +161,18 @@ def normalise_activity(row: dict) -> dict:
     sport = sport.lower().strip()
 
     distance_raw = safe_float(pick(row, "distance", "total_distance"))
-    # garmin-grafana stores distance in metres; convert to km
-    distance_km = round(distance_raw / 1000.0, 3) if distance_raw and distance_raw > 500 else (
-        round(distance_raw, 3) if distance_raw else None
-    )
+    # garmin-grafana always stores distance in metres
+    distance_km = round(distance_raw / 1000.0, 3) if distance_raw else None
 
     duration_raw = safe_float(pick(
         row, "elapsedDuration", "duration", "elapsed_duration",
         "total_elapsed_time", "totalElapsedTime", "moving_duration", "movingDuration"
     ))
-    # duration in seconds → minutes
-    duration_minutes = round(duration_raw / 60.0, 2) if duration_raw and duration_raw > 300 else (
-        round(duration_raw, 2) if duration_raw else None
-    )
+    # garmin-grafana always stores duration in seconds
+    duration_minutes = round(duration_raw / 60.0, 2) if duration_raw else None
+
+    moving_raw = safe_float(pick(row, "movingDuration", "moving_duration"))
+    moving_minutes = round(moving_raw / 60.0, 2) if moving_raw else None
 
     avg_hr = safe_float(pick(row, "average_hr", "avg_hr", "averageHR", "average_heart_rate"))
     max_hr = safe_float(pick(row, "max_hr", "maxHR", "max_heart_rate"))
@@ -186,8 +186,8 @@ def normalise_activity(row: dict) -> dict:
     cadence = safe_float(pick(row, "average_cadence", "avg_cadence", "averageCadence"))
     if cadence: cadence = round(cadence, 1)
 
-    np_val = safe_float(pick(row, "normalized_power", "normalisedPower", "np"))
-    if np_val: np_val = round(np_val, 1)
+    avg_power_val = safe_float(pick(row, "averagePower", "avg_power", "average_power"))
+    if avg_power_val: avg_power_val = round(avg_power_val, 1)
 
     avg_speed_raw = safe_float(pick(
         row, "average_speed", "avg_speed", "averageSpeed", "enhanced_avg_speed"
@@ -247,6 +247,7 @@ def normalise_activity(row: dict) -> dict:
         "sport_type": sport,
         "distance_km": distance_km,
         "duration_minutes": duration_minutes,
+        "moving_duration_minutes": moving_minutes,
         "avg_hr": avg_hr,
         "max_hr": max_hr,
         "calories": calories,
@@ -255,7 +256,8 @@ def normalise_activity(row: dict) -> dict:
         "max_speed_kmh": max_speed_kmh,
         "elevation_gain_m": elev,
         "avg_cadence": cadence,
-        "normalized_power": np_val,
+        "avg_power": avg_power_val,
+        "max_power": None,  # backfilled from ActivityGPS by query_all_activities()
         "hr_zones": hr_zones,
     }
 
@@ -334,9 +336,8 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
     index = safe_int(pick(row, "Index", "index", "lap_index"))
 
     dist_raw = safe_float(pick(row, "Distance", "distance"))
-    dist_km = round(dist_raw / 1000.0, 3) if dist_raw and dist_raw > 500 else (
-        round(dist_raw, 3) if dist_raw else None
-    )
+    # garmin-grafana always stores distance in metres
+    dist_km = round(dist_raw / 1000.0, 3) if dist_raw else None
 
     elapsed_raw = safe_float(pick(row, "Elapsed_Time", "elapsed_time", "total_elapsed_time"))
     # Lap durations are typically < 300s, so use seconds-to-minutes without heuristic
@@ -1053,7 +1054,142 @@ def query_all_activities() -> list[dict]:
             raise ConnectionError(str(exc)) from exc
 
     deduped = _dedup_rows(raw_rows)
-    return [
+    activities = [
         a for a in (normalise_activity(r) for r in deduped)
         if a.get("sport_type") != "no activity"
     ]
+
+    # Backfill power/cadence from ActivityLap for activities that lack them
+    missing_ids = [
+        a["activity_id"] for a in activities
+        if a.get("activity_id") and a.get("avg_power") is None
+    ]
+    if missing_ids:
+        lap_power = _query_all_lap_power()
+        for act in activities:
+            aid = act.get("activity_id")
+            if not aid:
+                continue
+            entry = lap_power.get(str(aid))
+            if entry is None:
+                continue
+            pw, cad = entry
+            if act.get("avg_power") is None and pw is not None:
+                act["avg_power"] = pw
+            if act.get("avg_cadence") is None and cad is not None:
+                act["avg_cadence"] = cad
+
+    # Backfill max_power from ActivityGPS (single server-side MAX aggregate)
+    gps_max = _query_all_max_power_from_gps()
+    if gps_max:
+        for act in activities:
+            aid = act.get("activity_id")
+            if aid is not None:
+                act["max_power"] = gps_max.get(str(aid))
+
+    return activities
+
+
+def _query_all_lap_power() -> dict[str, tuple[float | None, float | None]]:
+    """
+    Bulk-fetch Avg_Power and Avg_Cadence from all ActivityLap rows,
+    compute duration-weighted averages per ActivityID.
+
+    Returns {activity_id: (weighted_avg_power, weighted_avg_cadence)}.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_LAP}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+            '''
+            raw = _v2_query(q)
+        else:
+            q = (
+                f'SELECT * FROM "{MEASUREMENT_ACTIVITY_LAP}" '
+                f'ORDER BY time ASC'
+            )
+            raw = _v1_query(q)
+    except Exception as exc:
+        logger.debug("Lap power bulk query failed (non-fatal): %s", exc)
+        return {}
+
+    deduped = _dedup_laps(raw)
+
+    # Group laps by ActivityID and compute weighted averages
+    from collections import defaultdict
+    by_activity: dict[str, list[dict]] = defaultdict(list)
+    for lap in deduped:
+        aid = lap.get("ActivityID") or lap.get("Activity_ID") or lap.get("activity_id")
+        if aid:
+            by_activity[str(aid)].append(lap)
+
+    result: dict[str, tuple[float | None, float | None]] = {}
+    for aid, laps in by_activity.items():
+        total_power_dur = 0.0
+        total_power_val = 0.0
+        total_cad_dur = 0.0
+        total_cad_val = 0.0
+        for lap in laps:
+            dur = safe_float(lap.get("Elapsed_Time") or lap.get("elapsed_time"))
+            if not dur or dur <= 0:
+                continue
+            pw = safe_float(lap.get("Avg_Power") or lap.get("avg_power"))
+            if pw is not None and pw > 0:
+                total_power_val += pw * dur
+                total_power_dur += dur
+            cad = safe_float(lap.get("Avg_Cadence") or lap.get("avg_cadence"))
+            if cad is not None and cad > 0:
+                total_cad_val += cad * dur
+                total_cad_dur += dur
+
+        avg_pw = round(total_power_val / total_power_dur, 1) if total_power_dur > 0 else None
+        avg_cad = round(total_cad_val / total_cad_dur, 1) if total_cad_dur > 0 else None
+        if avg_pw is not None or avg_cad is not None:
+            result[aid] = (avg_pw, avg_cad)
+
+    return result
+
+
+def _query_all_max_power_from_gps() -> dict[str, float]:
+    """
+    Return {activity_id: max_power_watts} via a server-side MAX() aggregate on
+    ActivityGPS.  Returns one value per activity — no raw samples transferred.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["_field"] == "Power")
+              |> group(columns: ["ActivityID"])
+              |> max()
+            '''
+            raw = _v2_query(q)
+            return {
+                str(r["ActivityID"]): float(r["_value"])
+                for r in raw
+                if r.get("ActivityID") and r.get("_value") is not None
+            }
+        else:
+            q = (
+                f'SELECT MAX("Power") FROM "{MEASUREMENT_ACTIVITY_GPS}" '
+                f'GROUP BY "ActivityID"'
+            )
+            result = _v1_client().query(q)
+            mapping: dict[str, float] = {}
+            for (_meas, tags), points in result.items():
+                if not tags or "ActivityID" not in tags:
+                    continue
+                aid = str(tags["ActivityID"])
+                for point in points:
+                    val = safe_float(point.get("max"))
+                    if val is not None:
+                        mapping[aid] = val
+            return mapping
+    except Exception as exc:
+        logger.debug("ActivityGPS max power query failed (non-fatal): %s", exc)
+        return {}

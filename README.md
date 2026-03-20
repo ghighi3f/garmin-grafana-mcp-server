@@ -295,7 +295,7 @@ Returns activities from the last N days with a summary.
 | Parameter | Type | Default | Range / Values |
 |---|---|---|---|
 | `days` | int | `7` | 1–90 |
-| `sport_type` | str | `"all"` | `"running"`, `"cycling"`, `"swimming"`, `"all"` |
+| `sport_type` | str | `"all"` | Any Garmin sport type (e.g. `"running"`, `"cycling"`, `"hiking"`, `"trail_running"`, `"strength_training"`). Supports partial matching — `"cycling"` also matches `"indoor_cycling"`. `"all"` = no filter. |
 | `limit` | int | `20` | 1–100 |
 
 ### `get_weekly_load_summary`
@@ -337,7 +337,7 @@ HR zone distribution and polarization analysis (low/moderate/high intensity brea
 | Parameter | Type | Default | Range / Values |
 |---|---|---|---|
 | `days` | int | `30` | 7–180 |
-| `sport_type` | str | `"all"` | `"running"`, `"cycling"`, `"swimming"`, `"all"` |
+| `sport_type` | str | `"all"` | Any Garmin sport type (e.g. `"running"`, `"cycling"`, `"swimming"`, `"hiking"`). Supports partial matching. `"all"` = no filter. |
 
 ### `explore_schema`
 
@@ -377,6 +377,29 @@ Daily stress breakdown and body battery trend over 7–30 days. Surfaces systemi
 - Per-day: stress minutes (high/medium/low/rest) + body battery (at wake, high, low, drained, charged)
 - Summary: period averages + trend direction (`"improving"` / `"declining"` / `"stable"` for body battery; `"improving"` / `"worsening"` / `"stable"` for stress)
 
+### `get_personal_records`
+
+All-time personal records grouped by sport type. For each record, returns the value, unit, and the **activity_id, date, and activity_name** of the record-setting activity.
+
+| Parameter | Type | Default | Range / Values |
+|---|---|---|---|
+| `sport_type` | str | `"all"` | Any Garmin sport type (e.g. `"running"`, `"cycling"`). Supports partial matching. `"all"` returns records for every sport. |
+
+**Records tracked per sport:**
+
+| Record | Unit | Notes |
+|---|---|---|
+| `longest_distance` | km | |
+| `longest_duration` | minutes | Uses moving time (excludes pauses) |
+| `top_speed` | km/h | |
+| `fastest_avg_pace` | min/km | Pace sports only (running, swimming, walking, hiking) |
+| `fastest_avg_speed` | km/h | Speed sports only (cycling, rowing, etc.) |
+| `highest_max_hr` | bpm | |
+| `highest_avg_hr` | bpm | |
+| `most_calories` | kcal | |
+| `highest_avg_power` | watts | Duration-weighted average from lap data |
+| `highest_max_power` | watts | Peak instantaneous watt from ActivityGPS (server-side MAX aggregate) |
+
 ---
 
 ## Example prompts
@@ -400,6 +423,8 @@ Daily stress breakdown and body battery trend over 7–30 days. Surfaces systemi
 
 "Show my stress and body battery trend for the last 2 weeks.
  Am I recovering well between hard sessions?"
+
+"What are my all-time personal records for cycling and running?"
 ```
 
 ---
@@ -464,6 +489,7 @@ garmin-grafana-mcp-server/
 │   ├── recovery.py        — get_daily_recovery
 │   ├── detail.py          — get_activity_details
 │   ├── fitness.py         — get_fitness_trend, get_training_zones
+│   ├── records.py         — get_personal_records
 │   ├── stress.py          — get_stress_body_battery
 │   └── schema.py          — explore_schema
 ├── Dockerfile

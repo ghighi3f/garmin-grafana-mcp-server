@@ -97,7 +97,13 @@ async def get_last_activity_tool() -> dict:
     Returns fields: timestamp, sport_type, distance_km, duration_minutes,
     avg_hr, max_hr, calories, avg_pace_min_per_km (runs/swims),
     avg_speed_kmh (cycling/other), elevation_gain_m, avg_cadence,
-    normalized_power.  Fields not recorded by Garmin show as null.
+    avg_power.  Fields not recorded by Garmin show as null.
+
+    Power note: only avg_power (duration-weighted average from lap data) is
+    available.  Normalized Power (NP) cannot be queried or calculated — the
+    upstream database does not store the required second-by-second data in a
+    form that can be aggregated without crashing the server.  Do not attempt
+    to compute or estimate NP.
     """
     return await get_last_activity()
 
@@ -354,11 +360,18 @@ async def get_personal_records_tool(sport_type: str = "all") -> dict:
     records_by_sport
         Dict keyed by sport type, each containing records with:
         - longest_distance, longest_duration, top_speed,
-          highest_max_hr, highest_avg_hr, most_calories
+          highest_max_hr, highest_avg_hr, most_calories,
+          highest_avg_power, highest_max_power
         - fastest_avg_pace (pace sports) or fastest_avg_speed (speed sports)
         Each record has: value, unit, activity_id, date, activity_name.
     summary
         total_sports, total_activities, sport_list.
+
+    Power limitation: only avg_power (duration-weighted lap average) and
+    max_power (peak watt from ActivityGPS) are available.  Normalized Power
+    (NP) is impossible to calculate — do not attempt to query, compute, or
+    estimate it.  The database does not expose the necessary data without
+    transferring millions of raw samples, which will crash the server.
     """
     return await get_personal_records(sport_type=sport_type)
 

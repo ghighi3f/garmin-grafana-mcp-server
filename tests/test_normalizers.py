@@ -227,17 +227,17 @@ class TestNormaliseActivity:
         result = normalise_activity(row)
         assert result["hr_zones"] is None
 
-    def test_small_distance_treated_as_km(self):
-        """Distance < 500 is assumed already in km (no conversion)."""
-        row = {"distance": 5.2, "activityType": "Running"}
+    def test_small_distance_always_converted_from_metres(self):
+        """Short distances (< 500 m) are still divided by 1000."""
+        row = {"distance": 230.28, "activityType": "Cycling"}
         result = normalise_activity(row)
-        assert result["distance_km"] == 5.2
+        assert result["distance_km"] == 0.23
 
-    def test_short_duration_treated_as_minutes(self):
-        """Duration <= 300 is assumed already in minutes (no conversion)."""
-        row = {"elapsedDuration": 45.0, "activityType": "Running"}
+    def test_short_duration_always_converted_from_seconds(self):
+        """Short durations (< 300 s) are still divided by 60."""
+        row = {"elapsedDuration": 120.0, "activityType": "Running"}
         result = normalise_activity(row)
-        assert result["duration_minutes"] == 45.0
+        assert result["duration_minutes"] == 2.0
 
     def test_snake_case_field_variants(self):
         """normalise_activity handles snake_case alternatives too."""
@@ -730,6 +730,46 @@ class TestNormaliseActivityName:
 
 
 # ===================================================================
+# normalise_activity: moving_duration_minutes field
+# ===================================================================
+
+class TestNormaliseActivityMovingDuration:
+    """Tests for the moving_duration_minutes field added to normalise_activity."""
+
+    def test_moving_duration_present(self):
+        row = {"activityType": "Cycling", "movingDuration": 3600.0}  # 60 min
+        result = normalise_activity(row)
+        assert result["moving_duration_minutes"] == 60.0
+
+    def test_moving_duration_absent(self):
+        row = {"activityType": "Running", "elapsedDuration": 3120.0}
+        result = normalise_activity(row)
+        assert result["moving_duration_minutes"] is None
+
+    def test_moving_duration_differs_from_elapsed(self):
+        """Moving duration should be less than elapsed when pauses occurred."""
+        row = {
+            "activityType": "Cycling",
+            "elapsedDuration": 7200.0,    # 2 hours total
+            "movingDuration": 3600.0,     # 1 hour moving
+        }
+        result = normalise_activity(row)
+        assert result["duration_minutes"] == 120.0
+        assert result["moving_duration_minutes"] == 60.0
+
+    def test_moving_duration_snake_case(self):
+        row = {"activityType": "Running", "moving_duration": 1800.0}  # 30 min
+        result = normalise_activity(row)
+        assert result["moving_duration_minutes"] == 30.0
+
+    def test_moving_duration_small_value_always_converted(self):
+        """Short durations (< 300 s) are still divided by 60."""
+        row = {"activityType": "Running", "movingDuration": 45.0}
+        result = normalise_activity(row)
+        assert result["moving_duration_minutes"] == 0.75
+
+
+# ===================================================================
 # Personal records helpers (tools/records.py)
 # ===================================================================
 
@@ -741,25 +781,28 @@ class TestComputeRecords:
             "activity_id": 100, "timestamp": "2026-01-10T10:00:00Z",
             "activity_name": "Short Ride", "sport_type": "cycling",
             "distance_km": 20.0, "duration_minutes": 60.0,
+            "moving_duration_minutes": 55.0,
             "avg_speed_kmh": 20.0, "max_speed_kmh": 35.0,
             "avg_hr": 130.0, "max_hr": 165.0, "calories": 500,
-            "avg_pace_min_per_km": None,
+            "avg_pace_min_per_km": None, "avg_power": None,
         },
         {
             "activity_id": 200, "timestamp": "2026-02-15T09:00:00Z",
             "activity_name": "Long Ride", "sport_type": "cycling",
             "distance_km": 80.0, "duration_minutes": 240.0,
+            "moving_duration_minutes": 210.0,
             "avg_speed_kmh": 25.0, "max_speed_kmh": 52.0,
             "avg_hr": 140.0, "max_hr": 180.0, "calories": 1800,
-            "avg_pace_min_per_km": None,
+            "avg_pace_min_per_km": None, "avg_power": 185.0,
         },
         {
             "activity_id": 300, "timestamp": "2026-03-01T14:00:00Z",
             "activity_name": "Fast Ride", "sport_type": "cycling",
             "distance_km": 40.0, "duration_minutes": 90.0,
+            "moving_duration_minutes": 88.0,
             "avg_speed_kmh": 30.0, "max_speed_kmh": 48.0,
             "avg_hr": 150.0, "max_hr": 175.0, "calories": 900,
-            "avg_pace_min_per_km": None,
+            "avg_pace_min_per_km": None, "avg_power": 210.0,
         },
     ]
 
@@ -768,17 +811,19 @@ class TestComputeRecords:
             "activity_id": 400, "timestamp": "2026-01-05T07:00:00Z",
             "activity_name": "Easy Run", "sport_type": "running",
             "distance_km": 5.0, "duration_minutes": 30.0,
+            "moving_duration_minutes": 28.0,
             "avg_speed_kmh": None, "max_speed_kmh": 14.0,
             "avg_hr": 145.0, "max_hr": 170.0, "calories": 350,
-            "avg_pace_min_per_km": 6.0,
+            "avg_pace_min_per_km": 6.0, "avg_power": None,
         },
         {
             "activity_id": 500, "timestamp": "2026-02-20T06:30:00Z",
             "activity_name": "Tempo Run", "sport_type": "running",
             "distance_km": 10.0, "duration_minutes": 45.0,
+            "moving_duration_minutes": 44.0,
             "avg_speed_kmh": None, "max_speed_kmh": 18.0,
             "avg_hr": 165.0, "max_hr": 185.0, "calories": 600,
-            "avg_pace_min_per_km": 4.5,
+            "avg_pace_min_per_km": 4.5, "avg_power": None,
         },
     ]
 
@@ -795,6 +840,25 @@ class TestComputeRecords:
         assert rec["value"] == 30.0
         assert rec["unit"] == "km/h"
         assert rec["activity_id"] == 300
+
+    def test_cycling_longest_duration_uses_moving(self):
+        """longest_duration should use moving_duration_minutes, not elapsed."""
+        records = _compute_records(self.CYCLING_ACTIVITIES, "cycling")
+        rec = records["longest_duration"]
+        assert rec["value"] == 210.0   # moving, not 240 elapsed
+        assert rec["activity_id"] == 200
+
+    def test_cycling_highest_avg_power(self):
+        records = _compute_records(self.CYCLING_ACTIVITIES, "cycling")
+        rec = records["highest_avg_power"]
+        assert rec["value"] == 210.0
+        assert rec["unit"] == "watts"
+        assert rec["activity_id"] == 300
+
+    def test_power_null_when_no_data(self):
+        """Running activities with no power should have null record."""
+        records = _compute_records(self.RUNNING_ACTIVITIES, "running")
+        assert records["highest_avg_power"] is None
 
     def test_cycling_no_pace(self):
         records = _compute_records(self.CYCLING_ACTIVITIES, "cycling")
@@ -857,12 +921,14 @@ class TestComputeRecords:
                 "activity_id": 1, "timestamp": "2026-01-01T00:00:00Z",
                 "activity_name": None, "sport_type": "cycling",
                 "distance_km": None, "duration_minutes": 30.0,
+                "moving_duration_minutes": 28.0,
                 "avg_speed_kmh": 20.0, "max_speed_kmh": None,
                 "avg_hr": None, "max_hr": None, "calories": None,
-                "avg_pace_min_per_km": None,
+                "avg_pace_min_per_km": None, "avg_power": None,
             },
         ]
         records = _compute_records(activities, "cycling")
         assert records["longest_distance"] is None
-        assert records["longest_duration"]["value"] == 30.0
+        assert records["longest_duration"]["value"] == 28.0
         assert records["fastest_avg_speed"]["value"] == 20.0
+        assert records["highest_avg_power"] is None

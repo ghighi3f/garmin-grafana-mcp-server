@@ -18,23 +18,27 @@ from utils import safe_float, safe_int
 # Max-based record metrics (higher = better)
 _MAX_METRICS: dict[str, str] = {
     "longest_distance":  "distance_km",
-    "longest_duration":  "duration_minutes",
+    "longest_duration":  "moving_duration_minutes",
     "top_speed":         "max_speed_kmh",
     "highest_max_hr":    "max_hr",
     "highest_avg_hr":    "avg_hr",
     "most_calories":     "calories",
+    "highest_avg_power": "avg_power",
+    "highest_max_power": "max_power",
 }
 
 # Units for each record key
 _UNITS: dict[str, str] = {
-    "longest_distance":  "km",
-    "longest_duration":  "minutes",
-    "fastest_avg_speed": "km/h",
-    "fastest_avg_pace":  "min/km",
-    "top_speed":         "km/h",
-    "highest_max_hr":    "bpm",
-    "highest_avg_hr":    "bpm",
-    "most_calories":     "kcal",
+    "longest_distance":   "km",
+    "longest_duration":   "minutes",
+    "fastest_avg_speed":  "km/h",
+    "fastest_avg_pace":   "min/km",
+    "top_speed":          "km/h",
+    "highest_max_hr":     "bpm",
+    "highest_avg_hr":     "bpm",
+    "most_calories":      "kcal",
+    "highest_avg_power":  "watts",
+    "highest_max_power":  "watts",
 }
 
 
@@ -98,7 +102,7 @@ def _compute_records(activities: list[dict], sport: str) -> dict:
             # Round value appropriately
             if key == "most_calories":
                 display_val = safe_int(val)
-            elif key in ("highest_max_hr", "highest_avg_hr"):
+            elif key in ("highest_max_hr", "highest_avg_hr", "highest_avg_power", "highest_max_power"):
                 display_val = round(val, 1)
             else:
                 display_val = round(val, 2)

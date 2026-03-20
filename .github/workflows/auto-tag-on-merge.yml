@@ -17,11 +17,8 @@ jobs:
       - name: Extract version from branch name
         id: ver
         run: |
-          echo "BRANCH=${{ github.event.pull_request.head.ref }}" >> $GITHUB_OUTPUT
-          VERSION=${{ github.event.pull_request.head.ref#release/v }}
-          # Fallback: remove the prefix using shell
-          VERSION=${{ github.event.pull_request.head.ref }}
-          VERSION=${VERSION#release/v}
+          BRANCH="${{ github.event.pull_request.head.ref }}"
+          VERSION="${BRANCH#release/v}"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
 
       - name: Create tag via GitHub API

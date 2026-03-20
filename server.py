@@ -401,7 +401,7 @@ async def lifespan(app):
         yield
 
 
-app = FastAPI(title="Garmin MCP Server", version="0.1.0", redirect_slashes=False, lifespan=lifespan)
+app = FastAPI(title="Garmin MCP Server", version="1.1.0", redirect_slashes=False, lifespan=lifespan)
 
 
 @app.get("/health", response_class=JSONResponse)

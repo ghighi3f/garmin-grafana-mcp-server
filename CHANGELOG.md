@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [1.1.0] - 2026-03-20
+
+### Highlights
+
+- **FIX:** Removed dangerous distance/duration heuristics, replacing them with strict SI unit divisions to resolve the phantom PR bug.
+- **FEAT:** Added `highest_max_power` personal record via memory-safe, server-side `MAX()` aggregate.
+- **DOCS:** Added explicit tool documentation instructing LLMs that Normalized Power (NP) cannot be calculated, preventing OOM hallucinations.
 
 ### Changed
 

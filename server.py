@@ -1,7 +1,7 @@
 """
 Garmin MCP Server — data access layer for garmin-grafana InfluxDB.
 
-Exposes nine MCP tools over HTTP (streamable-HTTP transport):
+Exposes eleven MCP tools over HTTP (streamable-HTTP transport):
   • get_last_activity
   • get_recent_activities
   • get_weekly_load_summary
@@ -11,6 +11,8 @@ Exposes nine MCP tools over HTTP (streamable-HTTP transport):
   • get_training_zones
   • explore_schema
   • get_stress_body_battery
+  • get_personal_records
+  • get_training_status
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -51,6 +53,7 @@ from tools.fitness import get_fitness_trend, get_training_zones  # noqa: E402
 from tools.schema import explore_schema  # noqa: E402
 from tools.stress import get_stress_body_battery  # noqa: E402
 from tools.records import get_personal_records  # noqa: E402
+from tools.training_status import get_training_status  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -374,6 +377,40 @@ async def get_personal_records_tool(sport_type: str = "all") -> dict:
     transferring millions of raw samples, which will crash the server.
     """
     return await get_personal_records(sport_type=sport_type)
+
+
+@mcp.tool()
+async def get_training_status_tool() -> dict:
+    """
+    Fetch the latest Training Status and Training Readiness from InfluxDB.
+
+    No input parameters required.
+
+    Returns
+    -------
+    training_status
+        Most recent entry from the TrainingStatus measurement, containing:
+        - status_code         : Garmin training status enum (integer)
+        - status_label        : Human-readable status phrase (e.g. "Productive")
+        - acute_load          : 7-day acute training load
+        - chronic_load        : 28-day chronic training load (CTL)
+        - load_balance_ratio  : Acute / chronic workload ratio (ACWR)
+        - acwr_percent        : ACWR expressed as a percentage
+        - fitness_trend       : Fitness trend indicator (integer)
+        - max_chronic_load    : Upper bound of optimal chronic load range
+        - min_chronic_load    : Lower bound of optimal chronic load range
+        - timestamp           : Time of the record
+    training_readiness
+        Most recent entry from the TrainingReadiness measurement (requires
+        garmin-grafana v0.4.0+), or null if unavailable, containing:
+        - score               : Readiness score 0–100
+        - description         : Readiness label (e.g. "Good", "Fair")
+        - sleep_score, hrv_ratio, recovery_time_h, stress_history,
+          activity_history
+    data_note / training_readiness_note
+        Present only when a measurement is unavailable; explains why.
+    """
+    return await get_training_status()
 
 
 # ---------------------------------------------------------------------------

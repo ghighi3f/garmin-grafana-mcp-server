@@ -91,6 +91,10 @@ services:
       # FIELD_HR_ZONE_3: hrTimeInZone_3
       # FIELD_HR_ZONE_4: hrTimeInZone_4
       # FIELD_HR_ZONE_5: hrTimeInZone_5
+      #
+      # Training Status & Readiness (garmin-grafana v0.4.0+):
+      # MEASUREMENT_TRAINING_STATUS: TrainingStatus
+      # MEASUREMENT_TRAINING_READINESS: TrainingReadiness
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8765/health')"]
       interval: 30s
@@ -402,6 +406,43 @@ All-time personal records grouped by sport type. For each record, returns the va
 
 ---
 
+### `get_training_status`
+
+Fetches the latest Training Status and Training Readiness entries from InfluxDB. No input parameters required.
+
+**Returns:**
+
+- **`training_status`** — most recent entry from the `TrainingStatus` measurement:
+
+| Field | Type | Description |
+|---|---|---|
+| `status_code` | int | Garmin training status enum value |
+| `status_label` | str | Human-readable phrase (e.g. `"PRODUCTIVE_6"`, `"MAINTAINING_1"`) |
+| `acute_load` | int | 7-day acute training load |
+| `chronic_load` | int | 28-day chronic training load (CTL) |
+| `load_balance_ratio` | float | Acute / chronic workload ratio (ACWR) |
+| `acwr_percent` | int | ACWR expressed as a percentage |
+| `fitness_trend` | int | Garmin fitness trend indicator |
+| `max_chronic_load` | float | Upper bound of the optimal chronic load range |
+| `min_chronic_load` | float | Lower bound of the optimal chronic load range |
+| `timestamp` | str | ISO timestamp of the record |
+
+- **`training_readiness`** — most recent entry from the `TrainingReadiness` measurement (requires garmin-grafana v0.4.0+ and a compatible device). Returns `null` with a `training_readiness_note` if the measurement is not present.
+
+| Field | Type | Description |
+|---|---|---|
+| `score` | int | Readiness score 0–100 |
+| `description` | str | Readiness label (e.g. `"Good"`, `"Fair"`, `"Poor"`) |
+| `sleep_score` | int | Sleep component score |
+| `hrv_ratio` | float | HRV component ratio |
+| `recovery_time_h` | int | Recommended recovery time in hours |
+| `stress_history` | float | Stress history component |
+| `activity_history` | float | Activity history component |
+
+> **Graceful degradation:** if either measurement is missing (e.g. `TrainingReadiness` is only available with certain garmin-grafana versions and Garmin devices), the corresponding field is `null` and a `data_note` or `training_readiness_note` key explains why. The server never crashes.
+
+---
+
 ## Example prompts
 
 ```
@@ -425,6 +466,8 @@ All-time personal records grouped by sport type. For each record, returns the va
  Am I recovering well between hard sessions?"
 
 "What are my all-time personal records for cycling and running?"
+
+"What is my current training status? Am I overloading or undertraining?"
 ```
 
 ---
@@ -449,6 +492,8 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `MEASUREMENT_BODY_COMPOSITION` | `BodyComposition` |
 | `MEASUREMENT_RESTING_HR` | `DailyStats` |
 | `MEASUREMENT_HRV` | `HRV_Intraday` |
+| `MEASUREMENT_TRAINING_STATUS` | `TrainingStatus` |
+| `MEASUREMENT_TRAINING_READINESS` | `TrainingReadiness` |
 
 ### Field names
 
@@ -464,6 +509,15 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `FIELD_RACE_MARATHON` | `timeMarathon` | Fitness trend |
 | `FIELD_WEIGHT` | `weight` | Fitness trend |
 | `FIELD_HR_ZONE_1`–`5` | `hrTimeInZone_1`–`5` | Training zones, activity details |
+| `FIELD_TRAINING_STATUS_CODE` | `trainingStatus` | Training status (int enum) |
+| `FIELD_TRAINING_STATUS_LABEL` | `trainingStatusFeedbackPhrase` | Training status label (string) |
+| `FIELD_ACUTE_LOAD` | `dailyTrainingLoadAcute` | 7-day acute training load |
+| `FIELD_CHRONIC_LOAD` | `dailyTrainingLoadChronic` | 28-day chronic training load |
+| `FIELD_LOAD_BALANCE_RATIO` | `dailyAcuteChronicWorkloadRatio` | Acute/chronic ratio |
+| `FIELD_ACWR_PERCENT` | `acwrPercent` | ACWR as percentage |
+| `FIELD_FITNESS_TREND` | `fitnessTrend` | Fitness trend indicator |
+| `FIELD_READINESS_SCORE` | `trainingReadinessScore` | Readiness score 0–100 |
+| `FIELD_READINESS_LABEL` | `trainingReadinessDescription` | Readiness label string |
 
 ### Server
 
@@ -491,7 +545,8 @@ garmin-grafana-mcp-server/
 │   ├── fitness.py         — get_fitness_trend, get_training_zones
 │   ├── records.py         — get_personal_records
 │   ├── stress.py          — get_stress_body_battery
-│   └── schema.py          — explore_schema
+│   ├── schema.py          — explore_schema
+│   └── training_status.py — get_training_status
 ├── Dockerfile
 ├── docker-compose.yml     — Docker deployment (external garmin-grafana network)
 ├── .env.example           — Configuration template

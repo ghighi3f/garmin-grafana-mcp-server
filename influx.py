@@ -71,6 +71,19 @@ FIELD_HR_ZONE_3 = os.getenv("FIELD_HR_ZONE_3", "hrTimeInZone_3")
 FIELD_HR_ZONE_4 = os.getenv("FIELD_HR_ZONE_4", "hrTimeInZone_4")
 FIELD_HR_ZONE_5 = os.getenv("FIELD_HR_ZONE_5", "hrTimeInZone_5")
 
+# Training Status measurement fields (garmin-grafana v0.4.0+)
+MEASUREMENT_TRAINING_STATUS    = os.getenv("MEASUREMENT_TRAINING_STATUS",    "TrainingStatus")
+MEASUREMENT_TRAINING_READINESS = os.getenv("MEASUREMENT_TRAINING_READINESS", "TrainingReadiness")
+FIELD_TRAINING_STATUS_CODE     = os.getenv("FIELD_TRAINING_STATUS_CODE",     "trainingStatus")
+FIELD_TRAINING_STATUS_LABEL    = os.getenv("FIELD_TRAINING_STATUS_LABEL",    "trainingStatusFeedbackPhrase")
+FIELD_ACUTE_LOAD               = os.getenv("FIELD_ACUTE_LOAD",               "dailyTrainingLoadAcute")
+FIELD_CHRONIC_LOAD             = os.getenv("FIELD_CHRONIC_LOAD",             "dailyTrainingLoadChronic")
+FIELD_LOAD_BALANCE_RATIO       = os.getenv("FIELD_LOAD_BALANCE_RATIO",       "dailyAcuteChronicWorkloadRatio")
+FIELD_ACWR_PERCENT             = os.getenv("FIELD_ACWR_PERCENT",             "acwrPercent")
+FIELD_FITNESS_TREND            = os.getenv("FIELD_FITNESS_TREND",            "fitnessTrend")
+FIELD_READINESS_SCORE          = os.getenv("FIELD_READINESS_SCORE",          "trainingReadinessScore")
+FIELD_READINESS_LABEL          = os.getenv("FIELD_READINESS_LABEL",          "trainingReadinessDescription")
+
 # Sports that use pace (min/km) instead of speed (km/h)
 PACE_SPORTS: frozenset[str] = frozenset({
     "running", "run",
@@ -367,6 +380,38 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
         "avg_cadence": safe_float(pick(row, "Avg_Cadence", "avg_cadence")),
         "avg_power": safe_float(pick(row, "Avg_Power", "avg_power")),
         "avg_temperature_c": safe_float(pick(row, "Avg_Temperature", "avg_temperature")),
+    }
+
+
+def _normalise_training_status(row: dict) -> dict:
+    """Map raw TrainingStatus fields to a canonical dict."""
+    ts = row.get("time") or row.get("timestamp")
+    return {
+        "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+        "status_code": safe_int(pick(row, FIELD_TRAINING_STATUS_CODE, "trainingStatus")),
+        "status_label": pick(row, FIELD_TRAINING_STATUS_LABEL, "trainingStatusFeedbackPhrase", "status"),
+        "acute_load": safe_int(pick(row, FIELD_ACUTE_LOAD, "dailyTrainingLoadAcute", "acute_load")),
+        "chronic_load": safe_int(pick(row, FIELD_CHRONIC_LOAD, "dailyTrainingLoadChronic", "chronic_load")),
+        "load_balance_ratio": safe_float(pick(row, FIELD_LOAD_BALANCE_RATIO, "dailyAcuteChronicWorkloadRatio", "load_balance")),
+        "acwr_percent": safe_int(pick(row, FIELD_ACWR_PERCENT, "acwrPercent", "acwr_percent")),
+        "fitness_trend": safe_int(pick(row, FIELD_FITNESS_TREND, "fitnessTrend", "fitness_trend")),
+        "max_chronic_load": safe_float(pick(row, "maxTrainingLoadChronic", "max_chronic_load")),
+        "min_chronic_load": safe_float(pick(row, "minTrainingLoadChronic", "min_chronic_load")),
+    }
+
+
+def _normalise_training_readiness(row: dict) -> dict:
+    """Map raw TrainingReadiness fields to a canonical dict."""
+    ts = row.get("time") or row.get("timestamp")
+    return {
+        "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
+        "score": safe_int(pick(row, FIELD_READINESS_SCORE, "trainingReadinessScore", "readinessScore", "score")),
+        "description": pick(row, FIELD_READINESS_LABEL, "trainingReadinessDescription", "description"),
+        "sleep_score": safe_int(pick(row, "sleepScore", "sleep_score")),
+        "hrv_ratio": safe_float(pick(row, "hrvRatio", "hrv_ratio")),
+        "recovery_time_h": safe_int(pick(row, "recoveryTimeValue", "recoveryTime", "recovery_time")),
+        "stress_history": safe_float(pick(row, "stressHistory", "stress_history")),
+        "activity_history": safe_float(pick(row, "activityHistory", "activity_history")),
     }
 
 
@@ -1193,3 +1238,35 @@ def _query_all_max_power_from_gps() -> dict[str, float]:
     except Exception as exc:
         logger.debug("ActivityGPS max power query failed (non-fatal): %s", exc)
         return {}
+
+
+def query_latest_training_status() -> dict | None:
+    """
+    Return the most recent TrainingStatus row, or None if unavailable.
+    Non-fatal: missing measurement, empty result, or any DB error all return None.
+    """
+    q = f'SELECT * FROM "{MEASUREMENT_TRAINING_STATUS}" ORDER BY time DESC LIMIT 1'
+    try:
+        rows = _v1_query(q)
+    except Exception as exc:
+        logger.debug("TrainingStatus query failed (non-fatal): %s", exc)
+        return None
+    if not rows:
+        return None
+    return _normalise_training_status(rows[0])
+
+
+def query_latest_training_readiness() -> dict | None:
+    """
+    Return the most recent TrainingReadiness row, or None if unavailable.
+    Non-fatal: missing measurement, empty result, or any DB error all return None.
+    """
+    q = f'SELECT * FROM "{MEASUREMENT_TRAINING_READINESS}" ORDER BY time DESC LIMIT 1'
+    try:
+        rows = _v1_query(q)
+    except Exception as exc:
+        logger.debug("TrainingReadiness query failed (non-fatal): %s", exc)
+        return None
+    if not rows:
+        return None
+    return _normalise_training_readiness(rows[0])

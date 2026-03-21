@@ -383,13 +383,43 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
     }
 
 
+# Garmin FIT SDK 21.x training_status_feedback_phrase enum (index → human text).
+# garmin-grafana writes the compound string "STATUS_N" (e.g. "PRODUCTIVE_6");
+# the suffix N is the phrase index below.  Source: Garmin FIT SDK Profile.xlsx.
+_FEEDBACK_PHRASE_TEXT: dict[int, str] = {
+    0: "No specific feedback",
+    1: "Low aerobic shortage",
+    2: "High aerobic shortage",
+    3: "High aerobic demand",
+    4: "Anaerobics need work",
+    5: "Sufficient training",
+    6: "Primarily aerobic training",
+}
+
+
+def _decode_feedback_phrase(raw: str | None) -> str | None:
+    """Decode 'STATUS_N' → human-readable coaching advice, or None if unknown."""
+    if not raw:
+        return None
+    parts = raw.rsplit("_", 1)
+    if len(parts) != 2:
+        return None
+    try:
+        idx = int(parts[1])
+    except ValueError:
+        return None
+    return _FEEDBACK_PHRASE_TEXT.get(idx)
+
+
 def _normalise_training_status(row: dict) -> dict:
     """Map raw TrainingStatus fields to a canonical dict."""
     ts = row.get("time") or row.get("timestamp")
+    raw_phrase = pick(row, FIELD_TRAINING_STATUS_LABEL, "trainingStatusFeedbackPhrase", "status")
     return {
         "timestamp": ts.isoformat() if hasattr(ts, "isoformat") else str(ts),
         "status_code": safe_int(pick(row, FIELD_TRAINING_STATUS_CODE, "trainingStatus")),
-        "status_label": pick(row, FIELD_TRAINING_STATUS_LABEL, "trainingStatusFeedbackPhrase", "status"),
+        "status_label": raw_phrase,
+        "garmin_coaching_advice": _decode_feedback_phrase(raw_phrase),
         "acute_load": safe_int(pick(row, FIELD_ACUTE_LOAD, "dailyTrainingLoadAcute", "acute_load")),
         "chronic_load": safe_int(pick(row, FIELD_CHRONIC_LOAD, "dailyTrainingLoadChronic", "chronic_load")),
         "load_balance_ratio": safe_float(pick(row, FIELD_LOAD_BALANCE_RATIO, "dailyAcuteChronicWorkloadRatio", "load_balance")),

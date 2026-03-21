@@ -391,7 +391,10 @@ async def get_training_status_tool() -> dict:
     training_status
         Most recent entry from the TrainingStatus measurement, containing:
         - status_code         : Garmin training status enum (integer)
-        - status_label        : Human-readable status phrase (e.g. "Productive")
+        - status_label        : Raw FIT SDK phrase code (e.g. "PRODUCTIVE_6")
+        - garmin_coaching_advice : Human-readable coaching text decoded from the
+                               FIT SDK training_status_feedback_phrase enum
+                               (e.g. "Primarily aerobic training"); null if unknown
         - acute_load          : 7-day acute training load
         - chronic_load        : 28-day chronic training load (CTL)
         - load_balance_ratio  : Acute / chronic workload ratio (ACWR)

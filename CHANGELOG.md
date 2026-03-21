@@ -5,6 +5,18 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`garmin_coaching_advice` field** — `get_training_status_tool` now decodes the
+  compact Garmin FIT SDK `trainingStatusFeedbackPhrase` code (e.g. `"PRODUCTIVE_6"`)
+  into a human-readable coaching string (e.g. `"Primarily aerobic training"`).
+  Uses the FIT SDK 21.x `training_status_feedback_phrase` enum (6 phrases: indices
+  0–6). Gracefully returns `null` for unrecognised codes. Allows LLM-based coaching
+  agents to access Garmin's Firstbeat algorithm insights alongside raw training
+  loads and metrics.
+
 ## [1.2.0] - 2026-03-21
 
 ### Added

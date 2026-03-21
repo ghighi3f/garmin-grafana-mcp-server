@@ -6,6 +6,25 @@ An optional, self-hosted [Model Context Protocol (MCP)](https://modelcontextprot
 
 ---
 
+## Table of Contents
+
+- [How it fits into the ecosystem](#how-it-fits-into-the-ecosystem)
+- [🪄 See it in action: The AI Coach](#-see-it-in-action-the-ai-coach)
+- [Prerequisites](#prerequisites)
+- [Quick Start (Docker Compose)](#quick-start-docker-compose)
+- [Deployment (Docker — recommended)](#deployment-docker--recommended)
+- [Local Development](#local-development)
+- [Registering with an MCP-compatible AI client](#registering-with-an-mcp-compatible-ai-client)
+- [MCP Tools](#mcp-tools)
+- [Example prompts](#example-prompts)
+- [Configuration reference](#configuration-reference)
+- [Project structure](#project-structure)
+- [Schema compatibility](#schema-compatibility)
+- [Troubleshooting](#troubleshooting)
+- [License](#license)
+
+---
+
 ## How it fits into the ecosystem
 
 ```
@@ -21,6 +40,51 @@ garmin-grafana-mcp-server   ← this repo adds this
   └─ Reads from the same InfluxDB
   └─ Exposes MCP tools to AI clients (Claude, Copilot, etc.)
 ```
+
+---
+
+## 🪄 See it in action: The AI Coach
+
+Because this MCP server provides structured, context-aware data to LLMs like Claude, it acts as a world-class personal coach.
+
+Here is an actual, unedited response from Claude (via Copilot) summarizing a ride by cross-referencing **six different MCP tools** simultaneously (Activity Details, Training Status, Sleep/Recovery, Training Zones, and Stress):
+
+> **Prompt:** *"I just came back from my long Z2 ride. Please assess it in detail against our training plan!"*
+
+<details>
+<summary><b>View Claude's Analysis (Click to expand)</b></summary>
+
+### 1. SCORECARD vs PLAN
+| Metric | Target | Actual | Grade |
+|---|---|---|---|
+| Duration | 120–150 min | **137.5 min** | ✅ Perfect |
+| Time in Z1+Z2 | — | **99.4%** (130.1 min) | ✅ Excellent |
+| Max HR | ≤130 (ceiling) | **135 bpm** | ⚠️ Brief breach |
+| HR drift | <5% | **-4.5%** | ✅ Excellent |
+| Avg cadence | 85–95 rpm | **74 rpm** | ❌ Low |
+
+### 2. LAP-BY-LAP ANALYSIS
+- **Laps 3–6 were textbook Z2**: HR locked at 121–122 bpm. This is exactly the metabolic zone we wanted.
+- **No cardiac drift**: HR drift = -4.5%. This means your aerobic system handled the load comfortably.
+- **Cadence averaged 74 rpm** — below target (85–95). Next time, focus on spinning a lighter gear to reduce muscular fatigue.
+
+### 3. TRAINING STATUS & LOAD
+- Status remains **Productive** (code 7).
+- ACWR 1.4 is on the higher end of the sweet spot. Be cautious not to spike it further; the next session should be easy.
+- Aerobic TE 2.4 with zero anaerobic — exactly the prescribed stimulus.
+
+### 4. POLARIZATION SHIFT — THE BIG WIN
+| Metric | Before today | After today |
+|---|---|---|
+| Low intensity (Z1+Z2) | 49.4% | **56.7%** |
+
+**This single ride shifted your 30-day polarization by +7.3% toward low intensity.** Two more clean Z2 rides like this and you'll cross the 65% threshold.
+
+### 5. RECOMMENDATIONS
+**Next session:**
+- If HRV/recovery is good: another 90–120 min strict Z2. Same HR targets.
+- **Cadence drill**: consciously target 85+ rpm in the main block. Use a lighter gear and focus on pedal circles.
+</details>
 
 ---
 

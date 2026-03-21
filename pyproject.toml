@@ -1,6 +1,6 @@
 [project]
 name = "garmin-grafana-mcp-server"
-version = "1.1.0"
+version = "1.2.0"
 description = "MCP server exposing Garmin health and training data from InfluxDB"
 readme = "README.md"
 requires-python = ">=3.11"

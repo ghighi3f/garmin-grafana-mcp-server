@@ -481,7 +481,8 @@ Fetches the latest Training Status and Training Readiness entries from InfluxDB.
 | Field | Type | Description |
 |---|---|---|
 | `status_code` | int | Garmin training status enum value |
-| `status_label` | str | Human-readable phrase (e.g. `"PRODUCTIVE_6"`, `"MAINTAINING_1"`) |
+| `status_label` | str | Raw FIT SDK phrase code (e.g. `"PRODUCTIVE_6"`, `"MAINTAINING_1"`) |
+| `garmin_coaching_advice` | str\|null | Human-readable coaching text decoded from the FIT SDK `training_status_feedback_phrase` enum (e.g. `"Primarily aerobic training"`) |
 | `acute_load` | int | 7-day acute training load |
 | `chronic_load` | int | 28-day chronic training load (CTL) |
 | `load_balance_ratio` | float | Acute / chronic workload ratio (ACWR) |

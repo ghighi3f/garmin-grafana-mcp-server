@@ -5,6 +5,51 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.2.0] - 2026-03-21
+
+### Added
+
+- **`get_training_status_tool`** — new MCP tool (11th) exposing Garmin Training
+  Status and Training Readiness data from InfluxDB.
+  - Queries two measurements in parallel via `asyncio.gather()`:
+    - `TrainingStatus` — acute load, chronic load, ACWR, fitness trend, and
+      training status label (e.g. `"PRODUCTIVE_6"`).
+    - `TrainingReadiness` — readiness score (0–100), description, sleep score,
+      HRV ratio, recovery time, stress history, and activity history.
+  - **Fully graceful fallback:** both query functions are Tier-2 (non-fatal). If
+    either measurement is absent (e.g. `TrainingReadiness` requires
+    garmin-grafana v0.4.0+), the field returns `null` plus a human-readable
+    `data_note` or `training_readiness_note`. The server never crashes.
+  - Confirmed `TrainingStatus` schema against live InfluxDB: fields verified as
+    `trainingStatus` (int enum), `trainingStatusFeedbackPhrase` (string),
+    `dailyTrainingLoadAcute`, `dailyTrainingLoadChronic`,
+    `dailyAcuteChronicWorkloadRatio`, `acwrPercent`, `fitnessTrend`,
+    `maxTrainingLoadChronic`, `minTrainingLoadChronic`.
+  - New normaliser functions in `influx.py`: `_normalise_training_status()` and
+    `_normalise_training_readiness()`, both using `pick()` with camelCase-first
+    field candidates and env-var-overridable defaults.
+  - New query functions in `influx.py`: `query_latest_training_status()` and
+    `query_latest_training_readiness()` (both non-fatal: catch all exceptions,
+    return `None` on empty result or DB error).
+  - New tool module: `tools/training_status.py`.
+  - Registered in `server.py` as the 11th MCP tool.
+  - Added to `test_tools.py` integration test (test 10/10).
+
+- **New environment variables** for Training Status schema overrides (all
+  commented out in `.env.example` — defaults match the standard garmin-grafana
+  schema and require no changes for most users):
+  - `MEASUREMENT_TRAINING_STATUS` (default: `TrainingStatus`)
+  - `MEASUREMENT_TRAINING_READINESS` (default: `TrainingReadiness`)
+  - `FIELD_TRAINING_STATUS_CODE` (default: `trainingStatus`)
+  - `FIELD_TRAINING_STATUS_LABEL` (default: `trainingStatusFeedbackPhrase`)
+  - `FIELD_ACUTE_LOAD` (default: `dailyTrainingLoadAcute`)
+  - `FIELD_CHRONIC_LOAD` (default: `dailyTrainingLoadChronic`)
+  - `FIELD_LOAD_BALANCE_RATIO` (default: `dailyAcuteChronicWorkloadRatio`)
+  - `FIELD_ACWR_PERCENT` (default: `acwrPercent`)
+  - `FIELD_FITNESS_TREND` (default: `fitnessTrend`)
+  - `FIELD_READINESS_SCORE` (default: `trainingReadinessScore`)
+  - `FIELD_READINESS_LABEL` (default: `trainingReadinessDescription`)
+
 ## [1.1.0] - 2026-03-20
 
 ### Highlights

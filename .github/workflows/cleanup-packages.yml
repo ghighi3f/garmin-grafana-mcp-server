@@ -14,11 +14,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Run container retention policy
-        uses: snok/container-retention-policy@v3
+        uses: snok/container-retention-policy@v3.0.0
         with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          repository: ${{ github.repository }}
-          keep: 5
-          keep_tags: 'v*'
-          keep_latest: true
+          account: ${{ github.repository_owner }}
+          token: ${{ secrets.GITHUB_TOKEN }}
+          cut-off: 30d
           delete_untagged: true
+          keep-n-most-recent: 0
+          timestamp-to-use: 'updated_at'
+          dry-run: false

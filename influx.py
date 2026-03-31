@@ -84,6 +84,37 @@ FIELD_FITNESS_TREND            = os.getenv("FIELD_FITNESS_TREND",            "fi
 FIELD_READINESS_SCORE          = os.getenv("FIELD_READINESS_SCORE",          "trainingReadinessScore")
 FIELD_READINESS_LABEL          = os.getenv("FIELD_READINESS_LABEL",          "trainingReadinessDescription")
 
+# Sleep physiology (SleepIntraday measurement)
+MEASUREMENT_SLEEP_INTRADAY = os.getenv("MEASUREMENT_SLEEP_INTRADAY", "SleepIntraday")
+FIELD_SLEEP_HR             = os.getenv("FIELD_SLEEP_HR",             "heartRate")
+FIELD_SLEEP_HRV            = os.getenv("FIELD_SLEEP_HRV",           "hrvData")
+FIELD_SLEEP_RESPIRATION    = os.getenv("FIELD_SLEEP_RESPIRATION",    "respirationValue")
+FIELD_SLEEP_SPO2           = os.getenv("FIELD_SLEEP_SPO2",          "spo2Reading")
+FIELD_SLEEP_STRESS         = os.getenv("FIELD_SLEEP_STRESS",        "stressValue")
+FIELD_SLEEP_BODY_BATTERY   = os.getenv("FIELD_SLEEP_BODY_BATTERY",  "bodyBattery")
+FIELD_SLEEP_RESTLESS       = os.getenv("FIELD_SLEEP_RESTLESS",      "sleepRestlessValue")
+
+# Activity load (fields in ActivitySummary)
+FIELD_TRAINING_LOAD  = os.getenv("FIELD_TRAINING_LOAD",  "activityTrainingLoad")
+FIELD_AEROBIC_TE     = os.getenv("FIELD_AEROBIC_TE",     "aerobicTrainingEffect")
+FIELD_ANAEROBIC_TE   = os.getenv("FIELD_ANAEROBIC_TE",   "anaerobicTrainingEffect")
+
+# Daily energy balance (fields in DailyStats)
+FIELD_SEDENTARY_SECONDS      = os.getenv("FIELD_SEDENTARY_SECONDS",      "sedentarySeconds")
+FIELD_ACTIVE_SECONDS         = os.getenv("FIELD_ACTIVE_SECONDS",         "activeSeconds")
+FIELD_HIGHLY_ACTIVE_SECONDS  = os.getenv("FIELD_HIGHLY_ACTIVE_SECONDS",  "highlyActiveSeconds")
+FIELD_SLEEPING_SECONDS       = os.getenv("FIELD_SLEEPING_SECONDS",       "sleepingSeconds")
+FIELD_BMR_KCAL               = os.getenv("FIELD_BMR_KCAL",              "bmrKilocalories")
+FIELD_BB_DURING_SLEEP        = os.getenv("FIELD_BB_DURING_SLEEP",       "bodyBatteryDuringSleep")
+FIELD_ACTIVITY_STRESS_DUR    = os.getenv("FIELD_ACTIVITY_STRESS_DUR",   "activityStressDuration")
+FIELD_ACTIVITY_STRESS_PCT    = os.getenv("FIELD_ACTIVITY_STRESS_PCT",   "activityStressPercentage")
+
+# Fitness age (FitnessAge measurement)
+MEASUREMENT_FITNESS_AGE       = os.getenv("MEASUREMENT_FITNESS_AGE",       "FitnessAge")
+FIELD_FITNESS_AGE             = os.getenv("FIELD_FITNESS_AGE",             "fitnessAge")
+FIELD_CHRONOLOGICAL_AGE       = os.getenv("FIELD_CHRONOLOGICAL_AGE",       "chronologicalAge")
+FIELD_ACHIEVABLE_FITNESS_AGE  = os.getenv("FIELD_ACHIEVABLE_FITNESS_AGE",  "achievableFitnessAge")
+
 # Sports that use pace (min/km) instead of speed (km/h)
 PACE_SPORTS: frozenset[str] = frozenset({
     "running", "run",
@@ -271,6 +302,9 @@ def normalise_activity(row: dict) -> dict:
         "avg_cadence": cadence,
         "avg_power": avg_power_val,
         "max_power": None,  # backfilled from ActivityGPS by query_all_activities()
+        "training_load": safe_float(pick(row, FIELD_TRAINING_LOAD, "activityTrainingLoad", "training_load")),
+        "aerobic_training_effect": safe_float(pick(row, FIELD_AEROBIC_TE, "aerobicTrainingEffect", "aerobic_te")),
+        "anaerobic_training_effect": safe_float(pick(row, FIELD_ANAEROBIC_TE, "anaerobicTrainingEffect", "anaerobic_te")),
         "hr_zones": hr_zones,
     }
 
@@ -288,6 +322,14 @@ def normalise_daily_stats(row: dict) -> dict:
     rest_stress = safe_float(pick(row, "restStressDuration", "rest_stress_duration"))
     dist_raw = safe_float(pick(row, "totalDistanceMeters", "total_distance_meters"))
 
+    def _secs_to_hours(val):
+        f = safe_float(val)
+        return round(f / 3600.0, 2) if f else None
+
+    def _secs_to_mins(val):
+        f = safe_float(val)
+        return round(f / 60.0, 1) if f else None
+
     return {
         "date": date_str,
         "resting_hr": safe_float(pick(row, "restingHeartRate", "resting_heart_rate")),
@@ -296,20 +338,34 @@ def normalise_daily_stats(row: dict) -> dict:
         "body_battery_low": safe_int(pick(row, "bodyBatteryLowestValue", "body_battery_lowest")),
         "body_battery_drained": safe_int(pick(row, "bodyBatteryDrainedValue", "body_battery_drained")),
         "body_battery_charged": safe_int(pick(row, "bodyBatteryChargedValue", "body_battery_charged")),
+        "body_battery_during_sleep": safe_int(pick(row, FIELD_BB_DURING_SLEEP, "bodyBatteryDuringSleep")),
         "total_steps": safe_int(pick(row, "totalSteps", "total_steps")),
         "total_distance_km": round(dist_raw / 1000.0, 2) if dist_raw else None,
         "active_calories": safe_int(pick(row, "activeKilocalories", "active_kilocalories")),
+        "bmr_kcal": safe_int(pick(row, FIELD_BMR_KCAL, "bmrKilocalories")),
         "moderate_intensity_min": safe_float(pick(row, "moderateIntensityMinutes", "moderate_intensity_minutes")),
         "vigorous_intensity_min": safe_float(pick(row, "vigorousIntensityMinutes", "vigorous_intensity_minutes")),
         "stress_high_min": round(high_stress / 60.0, 1) if high_stress else None,
         "stress_medium_min": round(med_stress / 60.0, 1) if med_stress else None,
         "stress_low_min": round(low_stress / 60.0, 1) if low_stress else None,
         "stress_rest_min": round(rest_stress / 60.0, 1) if rest_stress else None,
+        "activity_stress_min": _secs_to_mins(pick(row, FIELD_ACTIVITY_STRESS_DUR, "activityStressDuration")),
+        "activity_stress_pct": safe_float(pick(row, FIELD_ACTIVITY_STRESS_PCT, "activityStressPercentage")),
+        "total_stress_min": _secs_to_mins(pick(row, "stressDuration", "stress_duration")),
+        "stress_pct": safe_float(pick(row, "stressPercentage", "stress_percentage")),
+        "uncategorized_stress_min": _secs_to_mins(pick(row, "uncategorizedStressDuration", "uncategorized_stress_duration")),
+        "sedentary_hours": _secs_to_hours(pick(row, FIELD_SEDENTARY_SECONDS, "sedentarySeconds")),
+        "active_hours": _secs_to_hours(pick(row, FIELD_ACTIVE_SECONDS, "activeSeconds")),
+        "highly_active_hours": _secs_to_hours(pick(row, FIELD_HIGHLY_ACTIVE_SECONDS, "highlyActiveSeconds")),
+        "sleeping_hours": _secs_to_hours(pick(row, FIELD_SLEEPING_SECONDS, "sleepingSeconds")),
         "avg_spo2": safe_float(pick(row, "averageSpo2", "average_spo2")),
         "lowest_spo2": safe_float(pick(row, "lowestSpo2", "lowest_spo2")),
         "max_hr": safe_float(pick(row, "maxHeartRate", "max_heart_rate")),
         "min_hr": safe_float(pick(row, "minHeartRate", "min_heart_rate")),
         "floors_ascended": safe_float(pick(row, "floorsAscended", "floors_ascended")),
+        "floors_descended": safe_float(pick(row, "floorsDescended", "floors_descended")),
+        "floors_ascended_meters": safe_float(pick(row, "floorsAscendedInMeters", "floors_ascended_in_meters")),
+        "floors_descended_meters": safe_float(pick(row, "floorsDescendedInMeters", "floors_descended_in_meters")),
     }
 
 
@@ -339,7 +395,10 @@ def normalise_sleep(row: dict) -> dict:
         "resting_hr": safe_float(pick(row, "restingHeartRate", "resting_heart_rate")),
         "avg_spo2": safe_float(pick(row, "averageSpO2Value", "average_spo2_value")),
         "lowest_spo2": safe_float(pick(row, "lowestSpO2Value", "lowest_spo2_value")),
+        "highest_spo2": safe_float(pick(row, "highestSpO2Value", "highest_spo2_value")),
         "avg_respiration": safe_float(pick(row, "averageRespirationValue", "average_respiration_value")),
+        "highest_respiration": safe_float(pick(row, "highestRespirationValue", "highest_respiration_value")),
+        "lowest_respiration": safe_float(pick(row, "lowestRespirationValue", "lowest_respiration_value")),
         "restless_count": safe_int(pick(row, "restlessMomentsCount", "restless_moments_count")),
     }
 
@@ -1300,3 +1359,223 @@ def query_latest_training_readiness() -> dict | None:
     if not rows:
         return None
     return _normalise_training_readiness(rows[0])
+
+
+# ---------------------------------------------------------------------------
+# New query functions for coaching blind-spot tools
+# ---------------------------------------------------------------------------
+
+def query_sleep_intraday_aggregated(days: int) -> list[dict]:
+    """Return per-day MIN/MAX/MEAN aggregates of SleepIntraday physiology.
+
+    Returns [] silently if measurement doesn't exist.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -{days}d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_SLEEP_INTRADAY}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> window(every: 1d)
+            '''
+            raw = _v2_query(q)
+            # v2 returns raw rows; aggregate in Python for now
+            return _aggregate_sleep_intraday_by_day(raw)
+        else:
+            q = (
+                f'SELECT '
+                f'MIN("{FIELD_SLEEP_HR}") AS min_hr, MAX("{FIELD_SLEEP_HR}") AS max_hr, MEAN("{FIELD_SLEEP_HR}") AS mean_hr, '
+                f'MIN("{FIELD_SLEEP_HRV}") AS min_hrv, MAX("{FIELD_SLEEP_HRV}") AS max_hrv, MEAN("{FIELD_SLEEP_HRV}") AS mean_hrv, '
+                f'MIN("{FIELD_SLEEP_RESPIRATION}") AS min_resp, MAX("{FIELD_SLEEP_RESPIRATION}") AS max_resp, MEAN("{FIELD_SLEEP_RESPIRATION}") AS mean_resp, '
+                f'MIN("{FIELD_SLEEP_SPO2}") AS min_spo2, MAX("{FIELD_SLEEP_SPO2}") AS max_spo2, MEAN("{FIELD_SLEEP_SPO2}") AS mean_spo2, '
+                f'MEAN("{FIELD_SLEEP_STRESS}") AS mean_stress, '
+                f'FIRST("{FIELD_SLEEP_BODY_BATTERY}") AS bb_first, LAST("{FIELD_SLEEP_BODY_BATTERY}") AS bb_last, '
+                f'MIN("{FIELD_SLEEP_BODY_BATTERY}") AS bb_min, MAX("{FIELD_SLEEP_BODY_BATTERY}") AS bb_max, '
+                f'MEAN("{FIELD_SLEEP_RESTLESS}") AS mean_restless, '
+                f'COUNT("{FIELD_SLEEP_HR}") AS epoch_count '
+                f'FROM "{MEASUREMENT_SLEEP_INTRADAY}" '
+                f'WHERE time >= now() - {days}d '
+                f'GROUP BY time(1d) fill(none)'
+            )
+            raw = _v1_query(q)
+            return [_normalise_sleep_physiology(r) for r in raw if r.get("epoch_count")]
+    except Exception as exc:
+        logger.debug("SleepIntraday aggregation failed (non-fatal): %s", exc)
+        return []
+
+
+def _aggregate_sleep_intraday_by_day(raw: list[dict]) -> list[dict]:
+    """Aggregate raw SleepIntraday rows by calendar day (v2 fallback)."""
+    from collections import defaultdict
+
+    by_day: dict[str, list[dict]] = defaultdict(list)
+    for row in raw:
+        ts = row.get("_time") or row.get("time")
+        if not ts:
+            continue
+        day_str = str(ts)[:10]
+        by_day[day_str].append(row)
+
+    results = []
+    for day_str in sorted(by_day.keys(), reverse=True):
+        rows = by_day[day_str]
+        hrs = [safe_float(r.get(FIELD_SLEEP_HR)) for r in rows]
+        hrs = [h for h in hrs if h is not None]
+        hrvs = [safe_float(r.get(FIELD_SLEEP_HRV)) for r in rows]
+        hrvs = [h for h in hrvs if h is not None]
+        resps = [safe_float(r.get(FIELD_SLEEP_RESPIRATION)) for r in rows]
+        resps = [r for r in resps if r is not None]
+        spo2s = [safe_float(r.get(FIELD_SLEEP_SPO2)) for r in rows]
+        spo2s = [s for s in spo2s if s is not None]
+        stresses = [safe_float(r.get(FIELD_SLEEP_STRESS)) for r in rows]
+        stresses = [s for s in stresses if s is not None]
+        bbs = [safe_float(r.get(FIELD_SLEEP_BODY_BATTERY)) for r in rows]
+        bbs = [b for b in bbs if b is not None]
+        restless = [safe_float(r.get(FIELD_SLEEP_RESTLESS)) for r in rows]
+        restless = [r for r in restless if r is not None]
+
+        if not hrs:
+            continue
+
+        results.append({
+            "date": day_str,
+            "heart_rate": {"min": min(hrs), "max": max(hrs), "mean": round(sum(hrs) / len(hrs), 1)},
+            "hrv": {"min": min(hrvs), "max": max(hrvs), "mean": round(sum(hrvs) / len(hrvs), 1)} if hrvs else None,
+            "respiration": {"min": round(min(resps), 1), "max": round(max(resps), 1), "mean": round(sum(resps) / len(resps), 1)} if resps else None,
+            "spo2": {"min": min(spo2s), "max": max(spo2s), "mean": round(sum(spo2s) / len(spo2s), 1)} if spo2s else None,
+            "stress": {"mean": round(sum(stresses) / len(stresses), 1)} if stresses else None,
+            "body_battery": {"first": bbs[0], "last": bbs[-1], "min": min(bbs), "max": max(bbs)} if bbs else None,
+            "restlessness": {"mean": round(sum(restless) / len(restless), 1)} if restless else None,
+            "epoch_count": len(hrs),
+        })
+    return results
+
+
+def _normalise_sleep_physiology(row: dict) -> dict:
+    """Map aggregated SleepIntraday row (from GROUP BY time(1d)) to canonical dict."""
+    ts = row.get("time") or row.get("_time")
+    date_str = str(ts)[:10] if ts else None
+
+    return {
+        "date": date_str,
+        "heart_rate": {
+            "min": safe_float(row.get("min_hr")),
+            "max": safe_float(row.get("max_hr")),
+            "mean": round(safe_float(row.get("mean_hr")) or 0, 1) or None,
+        },
+        "hrv": {
+            "min": safe_float(row.get("min_hrv")),
+            "max": safe_float(row.get("max_hrv")),
+            "mean": round(safe_float(row.get("mean_hrv")) or 0, 1) or None,
+        },
+        "respiration": {
+            "min": round(safe_float(row.get("min_resp")) or 0, 1) or None,
+            "max": round(safe_float(row.get("max_resp")) or 0, 1) or None,
+            "mean": round(safe_float(row.get("mean_resp")) or 0, 1) or None,
+        },
+        "spo2": {
+            "min": safe_float(row.get("min_spo2")),
+            "max": safe_float(row.get("max_spo2")),
+            "mean": round(safe_float(row.get("mean_spo2")) or 0, 1) or None,
+        },
+        "stress": {"mean": round(safe_float(row.get("mean_stress")) or 0, 1) or None},
+        "body_battery": {
+            "first": safe_int(row.get("bb_first")),
+            "last": safe_int(row.get("bb_last")),
+            "min": safe_int(row.get("bb_min")),
+            "max": safe_int(row.get("bb_max")),
+        },
+        "restlessness": {"mean": round(safe_float(row.get("mean_restless")) or 0, 1) or None},
+        "epoch_count": safe_int(row.get("epoch_count")),
+    }
+
+
+def query_fitness_age_weekly(weeks: int) -> list[dict]:
+    """Return weekly-sampled fitness age values."""
+    days = weeks * 7
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -{days}d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_FITNESS_AGE}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+              |> sort(columns: ["_time"], desc: true)
+            '''
+            raw = _v2_query(q)
+        else:
+            q = (
+                f'SELECT '
+                f'LAST("{FIELD_FITNESS_AGE}") AS fitness_age, '
+                f'LAST("{FIELD_CHRONOLOGICAL_AGE}") AS chrono_age, '
+                f'LAST("{FIELD_ACHIEVABLE_FITNESS_AGE}") AS achievable_age '
+                f'FROM "{MEASUREMENT_FITNESS_AGE}" '
+                f'WHERE time >= now() - {days}d '
+                f'GROUP BY time(1w) fill(none)'
+            )
+            raw = _v1_query(q)
+        return raw
+    except Exception as exc:
+        logger.debug("FitnessAge query failed (non-fatal): %s", exc)
+        return []
+
+
+def query_activity_load_history(days: int, sport_type: str | None, limit: int) -> list[dict]:
+    """Return activity rows with training-load fields from ActivitySummary.
+
+    Uses the same normalise_activity() as other activity tools so the load
+    fields (training_load, aerobic_training_effect, anaerobic_training_effect)
+    are included automatically.
+    """
+    try:
+        sport_type = sanitize_sport_type(sport_type)
+    except ValueError:
+        sport_type = None
+
+    raw_rows: list[dict] = []
+
+    if INFLUXDB_VERSION == 2:
+        sport_filter = ""
+        if sport_type:
+            sport_filter = (
+                f'|> filter(fn: (r) => r["sport_type"] =~ /.*{sport_type}.*/i'
+                f' or r["sport"] =~ /.*{sport_type}.*/i'
+                f' or r["activityType"] =~ /.*{sport_type}.*/i)'
+            )
+        q = f'''
+        from(bucket: "{INFLUXDB_DATABASE}")
+          |> range(start: -{days}d)
+          |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITIES}")
+          {sport_filter}
+          |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+          |> sort(columns: ["_time"], desc: true)
+          |> limit(n: {limit})
+        '''
+        try:
+            raw_rows = _v2_query(q)
+        except Exception as exc:
+            raise ConnectionError(str(exc)) from exc
+    else:
+        sport_clause = ""
+        if sport_type:
+            sport_clause = (
+                f" AND (\"sport_type\" =~ /.*{sport_type}.*/"
+                f" OR \"sport\" =~ /.*{sport_type}.*/"
+                f" OR \"activityType\" =~ /.*{sport_type}.*/)"
+            )
+        q = (
+            f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '
+            f'WHERE time >= now() - {days}d{sport_clause} '
+            f'ORDER BY time DESC LIMIT {limit}'
+        )
+        try:
+            raw_rows = _v1_query(q)
+        except Exception as exc:
+            raise ConnectionError(str(exc)) from exc
+
+    deduped = _dedup_rows(raw_rows)
+    return [
+        a for a in (normalise_activity(r) for r in deduped)
+        if a.get("sport_type") != "no activity"
+    ]

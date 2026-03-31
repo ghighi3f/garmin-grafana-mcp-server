@@ -506,6 +506,63 @@ Fetches the latest Training Status and Training Readiness entries from InfluxDB.
 
 > **Graceful degradation:** if either measurement is missing (e.g. `TrainingReadiness` is only available with certain garmin-grafana versions and Garmin devices), the corresponding field is `null` and a `data_note` or `training_readiness_note` key explains why. The server never crashes.
 
+### `get_sleep_physiology`
+
+Returns nightly autonomic physiology from SleepIntraday epoch data, merged with enriched SleepSummary.
+
+| Parameter | Type | Default | Range |
+|---|---|---|---|
+| `days` | int | `7` | 1–14 |
+
+**Returns per night:**
+- `intraday` — HR, HRV, respiration, SpO2 (min/max/mean), stress (mean), body battery (first/last/min/max), restlessness (mean), epoch count
+- `summary` — sleep score, stage durations, avg overnight HRV, respiration range, SpO2 range
+
+**Summary:** avg minimum HR, avg mean HRV, avg mean respiration, avg min SpO2, avg body battery charged. Trends: `min_hr_trend`, `hrv_trend`, `respiration_trend`.
+
+### `get_activity_load_history`
+
+Returns per-activity training load and training effect scores — shows which sessions drive acute load.
+
+| Parameter | Type | Default | Range / Values |
+|---|---|---|---|
+| `days` | int | `14` | 1–90 |
+| `sport_type` | str | `"all"` | Any Garmin sport type or `"all"` |
+| `limit` | int | `30` | 1–100 |
+
+**Returns per activity:** activity ID, sport, distance, duration, `training_load` (Garmin EPOC), `aerobic_training_effect` (0–5), `anaerobic_training_effect` (0–5), avg/max HR.
+
+**Summary:** `total_load`, `avg_load_per_session`, `load_by_sport`, `highest_load_activity`, `avg_aerobic_te`, `avg_anaerobic_te`.
+
+### `get_daily_energy_balance`
+
+Returns daily time-use breakdown, caloric data, movement, and stress attribution — reveals what happens between workouts and sleep.
+
+| Parameter | Type | Default | Range |
+|---|---|---|---|
+| `days` | int | `7` | 1–14 |
+
+**Returns per day:**
+- `time_use` — sedentary, active, highly active, sleeping (hours)
+- `energy` — BMR kcal, active kcal
+- `movement` — steps, distance, floors ascended/descended + meters
+- `recovery_context` — body battery during sleep, body battery at wake, resting HR
+- `stress_attribution` — activity stress min/pct, total stress, uncategorized stress
+
+**Summary:** period averages + `sedentary_trend`, `bb_during_sleep_trend`.
+
+### `get_fitness_age`
+
+Returns weekly-sampled fitness age trajectory — a single metric for long-term base-building progress.
+
+| Parameter | Type | Default | Range |
+|---|---|---|---|
+| `weeks` | int | `12` | 4–52 |
+
+**Returns per week:** `fitness_age`, `chronological_age`, `achievable_fitness_age`, `fitness_age_gap` (fitness – chronological, negative = younger), `improvement_potential` (fitness – achievable).
+
+**Trends:** `fitness_age_change`, `fitness_age_gap_change`, `improvement_potential_change` (delta oldest → newest).
+
 ---
 
 ## Example prompts
@@ -559,6 +616,8 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `MEASUREMENT_HRV` | `HRV_Intraday` |
 | `MEASUREMENT_TRAINING_STATUS` | `TrainingStatus` |
 | `MEASUREMENT_TRAINING_READINESS` | `TrainingReadiness` |
+| `MEASUREMENT_SLEEP_INTRADAY` | `SleepIntraday` |
+| `MEASUREMENT_FITNESS_AGE` | `FitnessAge` |
 
 ### Field names
 
@@ -583,6 +642,27 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `FIELD_FITNESS_TREND` | `fitnessTrend` | Fitness trend indicator |
 | `FIELD_READINESS_SCORE` | `trainingReadinessScore` | Readiness score 0–100 |
 | `FIELD_READINESS_LABEL` | `trainingReadinessDescription` | Readiness label string |
+| `FIELD_SLEEP_HR` | `heartRate` | Sleep HR epochs |
+| `FIELD_SLEEP_HRV` | `hrvData` | Sleep HRV epochs |
+| `FIELD_SLEEP_RESPIRATION` | `respirationValue` | Sleep respiration epochs |
+| `FIELD_SLEEP_SPO2` | `spo2Reading` | Sleep SpO2 epochs |
+| `FIELD_SLEEP_STRESS` | `stressValue` | Sleep stress epochs |
+| `FIELD_SLEEP_BODY_BATTERY` | `bodyBattery` | Sleep body battery epochs |
+| `FIELD_SLEEP_RESTLESS` | `sleepRestlessValue` | Sleep restlessness epochs |
+| `FIELD_TRAINING_LOAD` | `activityTrainingLoad` | Per-activity EPOC load |
+| `FIELD_AEROBIC_TE` | `aerobicTrainingEffect` | Aerobic training effect (0–5) |
+| `FIELD_ANAEROBIC_TE` | `anaerobicTrainingEffect` | Anaerobic training effect (0–5) |
+| `FIELD_SEDENTARY_SECONDS` | `sedentarySeconds` | Daily sedentary time |
+| `FIELD_ACTIVE_SECONDS` | `activeSeconds` | Daily active time |
+| `FIELD_HIGHLY_ACTIVE_SECONDS` | `highlyActiveSeconds` | Daily vigorous movement time |
+| `FIELD_SLEEPING_SECONDS` | `sleepingSeconds` | Daily sleeping time |
+| `FIELD_BMR_KCAL` | `bmrKilocalories` | Basal metabolic rate calories |
+| `FIELD_BB_DURING_SLEEP` | `bodyBatteryDuringSleep` | Body battery charged during sleep |
+| `FIELD_ACTIVITY_STRESS_DUR` | `activityStressDuration` | Activity-caused stress seconds |
+| `FIELD_ACTIVITY_STRESS_PCT` | `activityStressPercentage` | Activity stress % of total |
+| `FIELD_FITNESS_AGE` | `fitnessAge` | Current fitness age |
+| `FIELD_CHRONOLOGICAL_AGE` | `chronologicalAge` | Actual age |
+| `FIELD_ACHIEVABLE_FITNESS_AGE` | `achievableFitnessAge` | Optimal achievable fitness age |
 
 ### Server
 
@@ -611,7 +691,11 @@ garmin-grafana-mcp-server/
 │   ├── records.py         — get_personal_records
 │   ├── stress.py          — get_stress_body_battery
 │   ├── schema.py          — explore_schema
-│   └── training_status.py — get_training_status
+│   ├── training_status.py — get_training_status
+│   ├── sleep_physiology.py — get_sleep_physiology
+│   ├── activity_load.py   — get_activity_load_history
+│   ├── energy_balance.py  — get_daily_energy_balance
+│   └── fitness_age.py     — get_fitness_age
 ├── Dockerfile
 ├── docker-compose.yml     — Docker deployment (external garmin-grafana network)
 ├── .env.example           — Configuration template

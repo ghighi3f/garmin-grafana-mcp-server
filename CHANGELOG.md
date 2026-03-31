@@ -9,6 +9,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **4 new MCP tools** (11 → 15 total) for coaching blind-spot coverage:
+
+  - **`get_sleep_physiology_tool`** — overnight autonomic deep-dive. Aggregates
+    SleepIntraday epoch data (HR, HRV, respiration, SpO2, stress, body battery,
+    restlessness) into per-night min/max/mean summaries, merged with enriched
+    SleepSummary respiration and SpO2 ranges. Includes trends for overnight
+    minimum HR, mean HRV, and mean respiration.
+
+  - **`get_activity_load_history_tool`** — per-session load attribution. Shows
+    `training_load` (Garmin EPOC), `aerobic_training_effect` (0–5), and
+    `anaerobic_training_effect` (0–5) per activity. Summary includes total load,
+    load-by-sport breakdown, highest-load activity, and average training effects.
+    Complements `get_training_status` (which only gives aggregate ACWR).
+
+  - **`get_daily_energy_balance_tool`** — non-training recovery context. Surfaces
+    daily time-use breakdown (sedentary/active/highly-active/sleeping hours),
+    caloric data (BMR + active kcal), movement patterns (steps, floors), stress
+    attribution (activity stress vs life stress), and overnight body battery
+    recovery. Includes sedentary and body-battery-during-sleep trends.
+
+  - **`get_fitness_age_tool`** — long-term base-building compass. Weekly-sampled
+    fitness age, chronological age, and achievable fitness age from the FitnessAge
+    measurement. Computes fitness_age_gap (biological vs actual) and
+    improvement_potential (current vs achievable). Includes period trends.
+
+- **Enriched existing normalisers** — high-value fields previously discarded by
+  `normalise_activity()`, `normalise_daily_stats()`, and `normalise_sleep()` are
+  now surfaced by all tools that use them:
+
+  - `normalise_activity()` now includes `training_load`, `aerobic_training_effect`,
+    and `anaerobic_training_effect` (affects `get_last_activity`,
+    `get_recent_activities`, `get_activity_details`, `get_personal_records`).
+
+  - `normalise_daily_stats()` now includes 14 previously-discarded fields:
+    `sedentary_hours`, `active_hours`, `highly_active_hours`, `sleeping_hours`,
+    `bmr_kcal`, `body_battery_during_sleep`, `activity_stress_min`,
+    `activity_stress_pct`, `total_stress_min`, `stress_pct`,
+    `uncategorized_stress_min`, `floors_descended`, `floors_ascended_meters`,
+    `floors_descended_meters` (affects `get_daily_recovery`,
+    `get_stress_body_battery`).
+
+  - `normalise_sleep()` now includes `highest_respiration`, `lowest_respiration`,
+    and `highest_spo2` (affects `get_daily_recovery`).
+
+- **`compute_trend()` extracted to `utils.py`** — the trend computation function
+  (compare newer half vs older half of a value series) is now a shared utility.
+  Used by `get_stress_body_battery`, `get_sleep_physiology`,
+  `get_daily_energy_balance`.
+
+- **New environment variables** for schema overrides (all commented out in
+  `.env.example` — defaults match standard garmin-grafana):
+  - `MEASUREMENT_SLEEP_INTRADAY`, `FIELD_SLEEP_HR`, `FIELD_SLEEP_HRV`,
+    `FIELD_SLEEP_RESPIRATION`, `FIELD_SLEEP_SPO2`, `FIELD_SLEEP_STRESS`,
+    `FIELD_SLEEP_BODY_BATTERY`, `FIELD_SLEEP_RESTLESS`
+  - `FIELD_TRAINING_LOAD`, `FIELD_AEROBIC_TE`, `FIELD_ANAEROBIC_TE`
+  - `FIELD_SEDENTARY_SECONDS`, `FIELD_ACTIVE_SECONDS`,
+    `FIELD_HIGHLY_ACTIVE_SECONDS`, `FIELD_SLEEPING_SECONDS`, `FIELD_BMR_KCAL`,
+    `FIELD_BB_DURING_SLEEP`, `FIELD_ACTIVITY_STRESS_DUR`,
+    `FIELD_ACTIVITY_STRESS_PCT`
+  - `MEASUREMENT_FITNESS_AGE`, `FIELD_FITNESS_AGE`, `FIELD_CHRONOLOGICAL_AGE`,
+    `FIELD_ACHIEVABLE_FITNESS_AGE`
+
 - **`garmin_coaching_advice` field** — `get_training_status_tool` now decodes the
   compact Garmin FIT SDK `trainingStatusFeedbackPhrase` code (e.g. `"PRODUCTIVE_6"`)
   into a human-readable coaching string (e.g. `"Primarily aerobic training"`).

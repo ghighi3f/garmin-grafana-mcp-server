@@ -1,7 +1,7 @@
 """
 Garmin MCP Server — data access layer for garmin-grafana InfluxDB.
 
-Exposes eleven MCP tools over HTTP (streamable-HTTP transport):
+Exposes fifteen MCP tools over HTTP (streamable-HTTP transport):
   • get_last_activity
   • get_recent_activities
   • get_weekly_load_summary
@@ -13,6 +13,10 @@ Exposes eleven MCP tools over HTTP (streamable-HTTP transport):
   • get_stress_body_battery
   • get_personal_records
   • get_training_status
+  • get_sleep_physiology       (NEW — overnight autonomic deep-dive)
+  • get_activity_load_history  (NEW — per-session load attribution)
+  • get_daily_energy_balance   (NEW — non-training recovery context)
+  • get_fitness_age            (NEW — long-term base-building compass)
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -54,6 +58,10 @@ from tools.schema import explore_schema  # noqa: E402
 from tools.stress import get_stress_body_battery  # noqa: E402
 from tools.records import get_personal_records  # noqa: E402
 from tools.training_status import get_training_status  # noqa: E402
+from tools.sleep_physiology import get_sleep_physiology  # noqa: E402
+from tools.activity_load import get_activity_load_history  # noqa: E402
+from tools.energy_balance import get_daily_energy_balance  # noqa: E402
+from tools.fitness_age import get_fitness_age  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -100,7 +108,9 @@ async def get_last_activity_tool() -> dict:
     Returns fields: timestamp, sport_type, distance_km, duration_minutes,
     avg_hr, max_hr, calories, avg_pace_min_per_km (runs/swims),
     avg_speed_kmh (cycling/other), elevation_gain_m, avg_cadence,
-    avg_power.  Fields not recorded by Garmin show as null.
+    avg_power, training_load (Garmin EPOC load), aerobic_training_effect
+    (0–5), anaerobic_training_effect (0–5).  Fields not recorded by
+    Garmin show as null.
 
     Power note: only avg_power (duration-weighted average from lap data) is
     available.  Normalized Power (NP) cannot be queried or calculated — the
@@ -190,10 +200,14 @@ async def get_daily_recovery_tool(days: int = 7) -> dict:
         - date             : ISO date string
         - sleep            : sleep_score, total_sleep_hours, deep/light/rem/awake
                              hours, avg_overnight_hrv, avg_sleep_stress,
-                             body_battery_change, resting_hr, SpO2
+                             body_battery_change, resting_hr, SpO2,
+                             highest/lowest_respiration, highest_spo2
         - daily            : resting_hr, body_battery_at_wake/high/low,
-                             total_steps, stress breakdown (minutes),
-                             active_calories, intensity minutes, SpO2
+                             body_battery_during_sleep, total_steps,
+                             stress breakdown (minutes), activity_stress_min/pct,
+                             active_calories, bmr_kcal, intensity minutes,
+                             sedentary/active/highly_active/sleeping hours,
+                             SpO2, floors_ascended/descended + meters
     summary
         Period averages: avg_sleep_score, avg_sleep_hours, avg_overnight_hrv,
         avg_resting_hr, avg_body_battery_at_wake.
@@ -414,6 +428,132 @@ async def get_training_status_tool() -> dict:
         Present only when a measurement is unavailable; explains why.
     """
     return await get_training_status()
+
+
+@mcp.tool()
+async def get_sleep_physiology_tool(days: int = 7) -> dict:
+    """
+    Return nightly autonomic physiology from SleepIntraday epoch data,
+    merged with enriched SleepSummary (respiration + SpO2 ranges).
+
+    Parameters
+    ----------
+    days : int
+        Look-back window in days.  Range: 1–14.  Default: 7.
+
+    Returns
+    -------
+    nights : list
+        One entry per date (newest first), each containing:
+        - intraday  : heart_rate/hrv/respiration/spo2 (min/max/mean),
+                      stress (mean), body_battery (first/last/min/max),
+                      restlessness (mean), epoch_count
+        - summary   : sleep_score, total_sleep_hours, stage durations,
+                      avg_overnight_hrv, avg_sleep_stress,
+                      body_battery_change, resting_hr,
+                      highest/lowest_respiration, highest/lowest_spo2
+    summary
+        Period averages: avg_min_hr, avg_mean_hrv, avg_mean_respiration,
+        avg_min_spo2, avg_body_battery_charged.
+        Trends: min_hr_trend, hrv_trend, respiration_trend.
+    """
+    return await get_sleep_physiology(days=days)
+
+
+@mcp.tool()
+async def get_activity_load_history_tool(
+    days: int = 14,
+    sport_type: str = "all",
+    limit: int = 30,
+) -> dict:
+    """
+    Return per-activity training load and training effect scores.
+
+    Shows which sessions are driving your acute load — complements
+    get_training_status (which gives aggregate ACWR only).
+
+    Parameters
+    ----------
+    days : int
+        Look-back window in days.  Range: 1–90.  Default: 14.
+    sport_type : str
+        Filter by sport (e.g. "running", "cycling").  Default: "all".
+    limit : int
+        Maximum activities returned.  Range: 1–100.  Default: 30.
+
+    Returns
+    -------
+    activities
+        List (newest first), each with: activity_id, sport_type,
+        distance_km, duration_minutes, training_load (Garmin EPOC),
+        aerobic_training_effect (0–5), anaerobic_training_effect (0–5),
+        avg_hr, max_hr, intensity_minutes.
+    summary
+        total_load, avg_load_per_session, load_by_sport,
+        highest_load_activity, avg_aerobic_te, avg_anaerobic_te.
+    """
+    return await get_activity_load_history(
+        days=days, sport_type=sport_type, limit=limit,
+    )
+
+
+@mcp.tool()
+async def get_daily_energy_balance_tool(days: int = 7) -> dict:
+    """
+    Return daily time-use breakdown, caloric data, movement patterns,
+    and stress attribution from DailyStats.
+
+    Reveals what happens in the 14–16 waking hours between workouts and
+    sleep — sedentary time, NEAT movement, and training-vs-life stress.
+
+    Parameters
+    ----------
+    days : int
+        Look-back window in days.  Range: 1–14.  Default: 7.
+
+    Returns
+    -------
+    days : list
+        One entry per date (newest first), each containing:
+        - time_use            : sedentary/active/highly_active/sleeping hours
+        - energy              : bmr_kcal, active_kcal
+        - movement            : total_steps, distance_km, floors up/down + meters
+        - recovery_context    : body_battery_during_sleep, body_battery_at_wake,
+                                resting_hr
+        - stress_attribution  : activity_stress_min/pct, total_stress_min,
+                                stress_pct, uncategorized_stress_min
+    summary
+        Period averages for time-use, BMR, body battery during sleep.
+        Trends: sedentary_trend, bb_during_sleep_trend.
+    """
+    return await get_daily_energy_balance(days=days)
+
+
+@mcp.tool()
+async def get_fitness_age_tool(weeks: int = 12) -> dict:
+    """
+    Return weekly-sampled fitness age trajectory.
+
+    Tracks fitness age vs chronological age and the achievable fitness age
+    target — a single metric for long-term base-building progress.
+
+    Parameters
+    ----------
+    weeks : int
+        Look-back window in weeks.  Range: 4–52.  Default: 12.
+
+    Returns
+    -------
+    weeks : list
+        One entry per ISO week (newest first), each containing:
+        - fitness_age, chronological_age, achievable_fitness_age
+        - fitness_age_gap     : fitness_age - chronological_age (negative = younger)
+        - improvement_potential : fitness_age - achievable_fitness_age
+    trends
+        Delta between oldest and newest data points: fitness_age_change,
+        fitness_age_gap_change, improvement_potential_change.
+    """
+    return await get_fitness_age(weeks=weeks)
 
 
 # ---------------------------------------------------------------------------

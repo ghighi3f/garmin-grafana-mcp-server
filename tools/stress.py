@@ -12,7 +12,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 import influx
-from utils import pick, safe_int
+from utils import compute_trend, pick, safe_int
 
 # Garmin stress-level buckets
 # <= 0: unmeasured / activity marker (skip)
@@ -226,39 +226,10 @@ async def get_stress_body_battery(days: int = 7) -> dict[str, Any]:
             round(sum(bb_wake_vals) / len(bb_wake_vals))
             if bb_wake_vals else None
         ),
-        "body_battery_trend": _compute_trend(bb_wake_vals, higher_is_better=True),
-        "stress_trend": _compute_trend(stress_high_vals, higher_is_better=False),
+        "body_battery_trend": compute_trend(bb_wake_vals, higher_is_better=True),
+        "stress_trend": compute_trend(stress_high_vals, higher_is_better=False),
     }
 
     return {"days": result_days, "summary": summary}
 
 
-def _compute_trend(
-    values: list[float],
-    higher_is_better: bool,
-    threshold_pct: float = 5.0,
-) -> str | None:
-    """
-    Compare average of newer half vs older half of values.
-    Values are ordered newest-first (from query_daily_stats).
-    Requires >= 4 data points, else returns None.
-    """
-    if len(values) < 4:
-        return None
-    mid = len(values) // 2
-    newer_avg = sum(values[:mid]) / mid
-    older_avg = sum(values[mid:]) / (len(values) - mid)
-    if older_avg == 0:
-        return "stable"
-    diff_pct = (newer_avg - older_avg) / older_avg * 100
-    if higher_is_better:
-        if diff_pct > threshold_pct:
-            return "improving"
-        elif diff_pct < -threshold_pct:
-            return "declining"
-    else:
-        if diff_pct < -threshold_pct:
-            return "improving"
-        elif diff_pct > threshold_pct:
-            return "worsening"
-    return "stable"

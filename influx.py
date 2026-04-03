@@ -442,32 +442,26 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
     }
 
 
-# Garmin FIT SDK 21.x training_status_feedback_phrase enum (index → human text).
-# garmin-grafana writes the compound string "STATUS_N" (e.g. "PRODUCTIVE_6");
-# the suffix N is the phrase index below.  Source: Garmin FIT SDK Profile.xlsx.
-_FEEDBACK_PHRASE_TEXT: dict[int, str] = {
-    0: "No specific feedback",
-    1: "Low aerobic shortage",
-    2: "High aerobic shortage",
-    3: "High aerobic demand",
-    4: "Anaerobics need work",
-    5: "Sufficient training",
-    6: "Primarily aerobic training",
+# Athlete-verified compound status→coaching-advice map.
+# Each key is the full trainingStatusFeedbackPhrase string from garmin-grafana
+# (e.g. "PRODUCTIVE_1").  Values are human-readable coaching text confirmed
+# against the Garmin Connect app.  New statuses are added incrementally as
+# the athlete encounters and verifies them.
+TRAINING_STATUS_MAP: dict[str, str] = {
+    "PRODUCTIVE_1": "Productive (Balanced)",
+    "MAINTAINING_2": "Maintaining (High Aerobic Shortage)",
+    "MAINTAINING_1": "Maintaining (Low Aerobic Shortage)",
+    "DETRAINING": "Detraining",
 }
 
 
 def _decode_feedback_phrase(raw: str | None) -> str | None:
-    """Decode 'STATUS_N' → human-readable coaching advice, or None if unknown."""
+    """Look up compound phrase in TRAINING_STATUS_MAP; flag unmapped ones."""
     if not raw:
         return None
-    parts = raw.rsplit("_", 1)
-    if len(parts) != 2:
-        return None
-    try:
-        idx = int(parts[1])
-    except ValueError:
-        return None
-    return _FEEDBACK_PHRASE_TEXT.get(idx)
+    if raw in TRAINING_STATUS_MAP:
+        return TRAINING_STATUS_MAP[raw]
+    return f"{raw} (UNMAPPED_STATUS)"
 
 
 def _normalise_training_status(row: dict) -> dict:

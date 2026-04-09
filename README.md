@@ -322,10 +322,10 @@ You should see:
   Garmin MCP Server
 ============================================================
   InfluxDB   : localhost:8086/GarminStats
-  Measurements found: ['ActivitySummary', 'DailyStats', ...]
-  Transport  : streamable-HTTP
-  MCP endpoint ready: http://localhost:8765/mcp
-  /health check:      http://localhost:8765/health
+  Measurements: ['ActivitySummary', 'DailyStats', ...]
+  Transport  : HTTP
+  MCP endpoint: http://localhost:8765/mcp
+  /health:      http://localhost:8765/health
 ============================================================
 ```
 
@@ -333,20 +333,102 @@ You should see:
 
 ## Registering with an MCP-compatible AI client
 
-Add this to your AI client's MCP configuration (e.g. Claude Desktop `claude_desktop_config.json`, VS Code settings):
+The server supports three transports, selected via the `MCP_TRANSPORT` environment variable. Choose the one that matches your client.
+
+---
+
+### 1. stdio — Claude Desktop, Cursor, Windsurf, Claude Code
+
+**Best for:** local desktop clients that launch the server as a subprocess.
+
+**Without Docker (local Python):**
+
+```json
+{
+  "mcpServers": {
+    "garmin-local": {
+      "command": "python",
+      "args": ["/path/to/garmin-grafana-mcp-server/server.py"],
+      "env": {
+        "MCP_TRANSPORT": "stdio",
+        "INFLUXDB_HOST": "localhost",
+        "INFLUXDB_PORT": "8086",
+        "INFLUXDB_DATABASE": "GarminStats",
+        "INFLUXDB_USERNAME": "admin",
+        "INFLUXDB_PASSWORD": "your-password"
+      }
+    }
+  }
+}
+```
+
+**With Docker:**
+
+```json
+{
+  "mcpServers": {
+    "garmin-local": {
+      "command": "docker",
+      "args": [
+        "run", "-i", "--rm",
+        "--network", "garmin-grafana_default",
+        "-e", "MCP_TRANSPORT=stdio",
+        "-e", "INFLUXDB_HOST=influxdb",
+        "-e", "INFLUXDB_DATABASE=GarminStats",
+        "-e", "INFLUXDB_USERNAME=admin",
+        "-e", "INFLUXDB_PASSWORD=your-password",
+        "ghcr.io/ghighi3f/garmin-grafana-mcp-server:latest"
+      ]
+    }
+  }
+}
+```
+
+> **Tip:** The startup banner is written to stderr in stdio mode so it never interferes with the MCP protocol on stdout.
+
+---
+
+### 2. Streamable HTTP — ChatGPT, VS Code, and modern remote clients
+
+**Best for:** remote deployments where the server runs on a home server or NAS and the client connects over the network.
+
+Set `MCP_TRANSPORT=http` (or leave it unset — this is the default).
 
 ```json
 {
   "mcpServers": {
     "garmin-local": {
       "type": "http",
-      "url": "http://localhost:8765/mcp"
+      "url": "http://<your-server-ip>:8765/mcp"
     }
   }
 }
 ```
 
-> If the MCP server and AI client run on different machines, replace `localhost` with the server's IP or hostname.
+Replace `<your-server-ip>` with the IP address or hostname of the machine running the server (e.g. `192.168.1.100` or `pi5.local`). Use `localhost` if the client and server are on the same machine.
+
+> This is the **recommended transport** for new remote integrations. It is the default when `MCP_TRANSPORT` is unset.
+
+---
+
+### 3. SSE — Perplexity Mac and legacy SSE clients
+
+> **Note:** SSE transport is **deprecated** in the MCP specification. It is kept here for backward compatibility only. For new integrations, prefer Streamable HTTP (above).
+
+Set `MCP_TRANSPORT=sse`.
+
+```json
+{
+  "mcpServers": {
+    "garmin-local": {
+      "type": "sse",
+      "url": "http://<your-server-ip>:8765/sse"
+    }
+  }
+}
+```
+
+Replace `<your-server-ip>` with the IP address or hostname of the machine running the server (e.g. `192.168.1.100` or `pi5.local`).
 
 ---
 
@@ -670,6 +752,7 @@ Override these if your garmin-grafana schema uses different measurement names:
 |---|---|---|
 | `MCP_HOST` | `0.0.0.0` | Bind address |
 | `MCP_PORT` | `8765` | Bind port |
+| `MCP_TRANSPORT` | `http` | Transport: `http` (Streamable HTTP), `sse` (SSE, deprecated), or `stdio` (subprocess) |
 | `ALLOWED_HOSTS` | *(empty)* | DNS-rebinding allow-list (e.g. `pi5.local:*,localhost:*`) |
 
 ---
@@ -728,7 +811,8 @@ Then update the corresponding `MEASUREMENT_*` variables in your `.env`.
 | `"influxdb": "unreachable"` in health check | Network misconfiguration | Verify `docker network ls` and that the `name:` in `docker-compose.yml` matches |
 | `"InfluxDB connection failed"` from a tool | garmin-grafana not running | `docker ps`, restart containers |
 | Empty `activities` list | Measurement name mismatch | Run `SHOW MEASUREMENTS` and update `MEASUREMENT_ACTIVITIES` in `.env` |
-| `AttributeError: streamable_http_app` | `mcp` < 1.2 | `pip install --upgrade mcp` |
+| `AttributeError: streamable_http_app` | `mcp` < 1.6 | `pip install --upgrade mcp` |
+| stdio mode not working | Using uvicorn instead of `python server.py` | Run `MCP_TRANSPORT=stdio python server.py` — uvicorn is not used in stdio mode |
 | Tools not appearing in client | Client connected before server started | Restart the MCP client |
 
 ---

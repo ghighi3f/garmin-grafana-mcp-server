@@ -1,11 +1,14 @@
 """
 Garmin MCP Server — data access layer for garmin-grafana InfluxDB.
 
-Transport is selected via the MCP_TRANSPORT environment variable (default: http):
-  • MCP_TRANSPORT=http   — Streamable HTTP at /mcp  (ChatGPT, modern clients)
-  • MCP_TRANSPORT=sse    — SSE at /sse + POST /messages/  (Perplexity, legacy)
-  • MCP_TRANSPORT=stdio  — stdin/stdout, no HTTP server
-                           (Claude Desktop, Cursor, Windsurf, Claude Code)
+All HTTP transports are always active simultaneously:
+  • POST /mcp        — Streamable HTTP  (ChatGPT, VS Code, modern clients)
+  • GET  /sse        — SSE stream       (Perplexity, legacy — deprecated in MCP spec)
+  • POST /messages/  — SSE message endpoint
+  • GET  /health     — health / readiness probe
+
+For local subprocess clients (Claude Desktop, Cursor, Windsurf, Claude Code):
+  set MCP_TRANSPORT=stdio and run with `python server.py` (no HTTP server).
 
 All fifteen MCP tools work identically across every transport.
 
@@ -54,6 +57,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", 8765))
+# MCP_TRANSPORT is only consulted to detect stdio mode (MCP_TRANSPORT=stdio).
+# All HTTP transports (Streamable HTTP + SSE) are always mounted simultaneously.
 MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "http").lower().strip()
 
 # Import after env vars are loaded so influx.py picks them up
@@ -566,15 +571,15 @@ async def get_fitness_age_tool(weeks: int = 12) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI app + transport routing
+# FastAPI app — all HTTP transports active simultaneously
 # ---------------------------------------------------------------------------
 from contextlib import asynccontextmanager  # noqa: E402
-from fastapi import FastAPI, Request  # noqa: E402
+from fastapi import FastAPI  # noqa: E402
 from fastapi.responses import JSONResponse  # noqa: E402
+from mcp.server.sse import SseServerTransport  # noqa: E402
 
 
 async def _health_response() -> dict:
-    """Shared /health handler body — works in all HTTP-based transports."""
     connected = await asyncio.to_thread(influx.ping)
     influx_status = "connected" if connected else "unreachable"
 
@@ -591,82 +596,58 @@ async def _health_response() -> dict:
             pass
 
     host_display = "localhost" if MCP_HOST in ("0.0.0.0", "") else MCP_HOST
-    result: dict = {
+    return {
         "influxdb": influx_status,
         "last_activity_timestamp": last_ts,
         "measurements_found": measurements,
-        "transport": MCP_TRANSPORT,
+        "mcp_endpoint": f"http://{host_display}:{MCP_PORT}/mcp",
+        "sse_endpoint": f"http://{host_display}:{MCP_PORT}/sse",
     }
-    if MCP_TRANSPORT == "http":
-        result["mcp_endpoint"] = f"http://{host_display}:{MCP_PORT}/mcp"
-    elif MCP_TRANSPORT == "sse":
-        result["sse_endpoint"] = f"http://{host_display}:{MCP_PORT}/sse"
-    return result
 
 
-if MCP_TRANSPORT == "stdio":
-    # ── stdio mode: no HTTP server ──────────────────────────────────────────
-    # Define a stub `app` so `uvicorn server:app` fails with a clear error
-    # rather than an ImportError. Run this mode with `python server.py`.
-    app = FastAPI(
-        title="Garmin MCP Server",
-        description="Started in stdio mode — run with `python server.py`, not uvicorn.",
-        version="1.1.0",
-    )
+# ── Streamable HTTP (/mcp) ────────────────────────────────────────────────
+mcp_asgi = mcp.streamable_http_app()
 
-elif MCP_TRANSPORT == "sse":
-    # ── SSE mode: GET /sse  +  POST /messages/ ──────────────────────────────
-    from mcp.server.sse import SseServerTransport  # noqa: E402
 
-    _sse = SseServerTransport("/messages/")
+@asynccontextmanager
+async def lifespan(app: FastAPI):  # type: ignore[misc]
+    async with mcp.session_manager.run():
+        yield
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):  # type: ignore[misc]
-        yield  # SSE uses per-connection _mcp_server.run() — no session manager
 
-    app = FastAPI(title="Garmin MCP Server", version="1.1.0", redirect_slashes=False, lifespan=lifespan)
+app = FastAPI(title="Garmin MCP Server", version="1.1.0", redirect_slashes=False, lifespan=lifespan)
 
-    @app.get("/health", response_class=JSONResponse)
-    async def health_check() -> dict:
-        return await _health_response()
 
-    @app.get("/sse")
-    async def sse_endpoint(request: Request):
-        async with _sse.connect_sse(
-            request.scope, request.receive, request._send
-        ) as (read_stream, write_stream):
-            await mcp._mcp_server.run(
-                read_stream,
-                write_stream,
-                mcp._mcp_server.create_initialization_options(),
-            )
+@app.get("/health", response_class=JSONResponse)
+async def health_check() -> dict:
+    return await _health_response()
 
-    @app.post("/messages/")
-    async def messages_endpoint(request: Request):
-        await _sse.handle_post_message(request.scope, request.receive, request._send)
 
-else:
-    # ── http mode (default): Streamable HTTP at /mcp ────────────────────────
-    try:
-        mcp_asgi = mcp.streamable_http_app()
-        _transport_label = "streamable-HTTP"
-    except AttributeError:
-        # Older mcp versions fall back to SSE
-        mcp_asgi = mcp.sse_app()
-        _transport_label = "SSE"
+# ── SSE transport (/sse + /messages/) ────────────────────────────────────
+# Mounted as pure ASGI apps so the SSE transport owns the ASGI response
+# lifecycle entirely — no "response already completed" RuntimeErrors.
+_sse = SseServerTransport("/messages/")
 
-    @asynccontextmanager
-    async def lifespan(app: FastAPI):  # type: ignore[misc]
-        async with mcp.session_manager.run():
-            yield
 
-    app = FastAPI(title="Garmin MCP Server", version="1.1.0", redirect_slashes=False, lifespan=lifespan)
+async def _sse_asgi(scope, receive, send):
+    async with _sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
+        await mcp._mcp_server.run(
+            read_stream,
+            write_stream,
+            mcp._mcp_server.create_initialization_options(),
+        )
 
-    @app.get("/health", response_class=JSONResponse)
-    async def health_check() -> dict:
-        return await _health_response()
 
-    app.mount("/", mcp_asgi)
+async def _messages_asgi(scope, receive, send):
+    await _sse.handle_post_message(scope, receive, send)
+
+
+app.mount("/messages/", _messages_asgi)
+app.mount("/sse", _sse_asgi)
+
+# Streamable-HTTP catch-all must come after the more-specific /sse and
+# /messages/ mounts so those paths are not swallowed by the root mount.
+app.mount("/", mcp_asgi)
 
 
 # ---------------------------------------------------------------------------
@@ -691,15 +672,14 @@ def _print_banner() -> None:
     _p("=" * 60)
     _p(f"  InfluxDB   : {influx.INFLUXDB_HOST}:{influx.INFLUXDB_PORT}/{influx.INFLUXDB_DATABASE}")
     _p(f"  Measurements: {measurements}")
-    _p(f"  Transport  : {MCP_TRANSPORT.upper()}")
-    if MCP_TRANSPORT == "http":
-        _p(f"  MCP endpoint: http://{host_display}:{MCP_PORT}/mcp")
-        _p(f"  /health:      http://{host_display}:{MCP_PORT}/health")
-    elif MCP_TRANSPORT == "sse":
-        _p(f"  SSE endpoint: http://{host_display}:{MCP_PORT}/sse")
-        _p(f"  /health:      http://{host_display}:{MCP_PORT}/health")
-    else:
+    if MCP_TRANSPORT == "stdio":
+        _p("  Transport  : stdio")
         _p("  Listening on stdin / stdout (no HTTP server)")
+    else:
+        _p("  Transports : HTTP + SSE (always active)")
+        _p(f"  /mcp  (Streamable HTTP) : http://{host_display}:{MCP_PORT}/mcp")
+        _p(f"  /sse  (SSE, deprecated) : http://{host_display}:{MCP_PORT}/sse")
+        _p(f"  /health                 : http://{host_display}:{MCP_PORT}/health")
     _p("=" * 60)
     _p()
 

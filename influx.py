@@ -450,8 +450,9 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
 TRAINING_STATUS_MAP: dict[str, str] = {
     "PRODUCTIVE_1": "Productive (Balanced)",
     "MAINTAINING_2": "Maintaining (High Aerobic Shortage)",
-    "MAINTAINING_1": "Maintaining (Low Aerobic Shortage)",
+    "MAINTAINING_1": "Maintaining (Balanced)",
     "DETRAINING": "Detraining",
+    "RECOVERY_1": "Recovery (Above Targets - Load too high, scale back duration/frequency)",
 }
 
 

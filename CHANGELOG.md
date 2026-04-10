@@ -7,6 +7,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-04-10
+
+### Changed
+
+- **Replaced FastAPI with a plain Starlette `Router` as the root ASGI app** — the
+  server no longer depends on FastAPI. `/health` is a lightweight Starlette route
+  backed by `starlette.responses.JSONResponse`. The `/sse` and `/messages/` handlers
+  are raw ASGI callables that own the full response lifecycle, eliminating all
+  "response already completed" runtime errors that occurred when the SSE transport
+  and FastAPI both tried to send a response.
+
+- **SSE and Streamable HTTP always active simultaneously** — both transports are mounted
+  in a single `Router` at startup and active on the same port. `MCP_TRANSPORT` only
+  needs to be set for stdio (subprocess) clients; HTTP deployments require no transport
+  configuration at all.
+
+### Fixed
+
+- **`GET /sse` returning 404** — Starlette's `Mount` path-regex requires a sub-path
+  after the mount point, so `Mount("/sse")` silently fell through to the `Mount("/")`
+  catch-all. Fixed by registering the SSE route as a `Route` (exact-path matching) with
+  its `.app` overridden to the raw ASGI callable, bypassing `Route.__init__`'s
+  `request_response()` wrapping.
+
+- **`POST /messages/?session_id=...` returning 404** — same root cause as the `/sse`
+  issue above, resolved together in the `Router` refactor.
+
+## [1.3.0] - 2026-04-01
+
 ### Added
 
 - **4 new MCP tools** (11 → 15 total) for coaching blind-spot coverage:
@@ -78,6 +107,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0–6). Gracefully returns `null` for unrecognised codes. Allows LLM-based coaching
   agents to access Garmin's Firstbeat algorithm insights alongside raw training
   loads and metrics.
+
+### Changed
+
+- **Replaced FastAPI with a plain Starlette `Router` as the root ASGI app** — the
+  server no longer depends on FastAPI. `/health` is a lightweight Starlette route
+  backed by `starlette.responses.JSONResponse`. The `/sse` and `/messages/` handlers
+  are raw ASGI callables that own the full response lifecycle, eliminating all
+  "response already completed" runtime errors that occurred when the SSE transport
+  and FastAPI both tried to send a response.
+
+- **SSE and Streamable HTTP always active simultaneously** — both transports are mounted
+  in a single `Router` at startup and active on the same port. `MCP_TRANSPORT` only
+  needs to be set for stdio (subprocess) clients; HTTP deployments require no transport
+  configuration at all.
+
+### Fixed
+
+- **`GET /sse` returning 404** — Starlette's `Mount` path-regex requires a sub-path
+  after the mount point, so `Mount("/sse")` silently fell through to the `Mount("/")`
+  catch-all. Fixed by registering the SSE route as a `Route` (exact-path matching) with
+  its `.app` overridden to the raw ASGI callable, bypassing `Route.__init__`'s
+  `request_response()` wrapping.
+
+- **`POST /messages/?session_id=...` returning 404** — same root cause as the `/sse`
+  issue above, resolved together in the `Router` refactor.
 
 ## [1.2.0] - 2026-03-21
 

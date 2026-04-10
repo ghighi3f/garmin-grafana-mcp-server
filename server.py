@@ -1,7 +1,18 @@
 """
 Garmin MCP Server — data access layer for garmin-grafana InfluxDB.
 
-Exposes fifteen MCP tools over HTTP (streamable-HTTP transport):
+All HTTP transports are always active simultaneously:
+  • POST /mcp        — Streamable HTTP  (ChatGPT, VS Code, modern clients)
+  • GET  /sse        — SSE stream       (Perplexity, legacy — deprecated in MCP spec)
+  • POST /messages/  — SSE message endpoint
+  • GET  /health     — health / readiness probe
+
+For local subprocess clients (Claude Desktop, Cursor, Windsurf, Claude Code):
+  set MCP_TRANSPORT=stdio and run with `python server.py` (no HTTP server).
+
+All fifteen MCP tools work identically across every transport.
+
+Tools:
   • get_last_activity
   • get_recent_activities
   • get_weekly_load_summary
@@ -46,6 +57,9 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 MCP_HOST = os.getenv("MCP_HOST", "0.0.0.0")
 MCP_PORT = int(os.getenv("MCP_PORT", 8765))
+# MCP_TRANSPORT is only consulted to detect stdio mode (MCP_TRANSPORT=stdio).
+# All HTTP transports (Streamable HTTP + SSE) are always mounted simultaneously.
+MCP_TRANSPORT = os.getenv("MCP_TRANSPORT", "http").lower().strip()
 
 # Import after env vars are loaded so influx.py picks them up
 import influx  # noqa: E402
@@ -557,41 +571,16 @@ async def get_fitness_age_tool(weeks: int = 12) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# FastAPI app
+# FastAPI app — all HTTP transports active simultaneously
 # ---------------------------------------------------------------------------
 from contextlib import asynccontextmanager  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
-from fastapi.responses import JSONResponse  # noqa: E402
-
-# Build the MCP ASGI app first — this initialises mcp.session_manager which
-# the lifespan below must start.  FastAPI does not propagate lifespan events
-# to mounted sub-apps, so we drive the session-manager lifecycle ourselves.
-try:
-    mcp_asgi = mcp.streamable_http_app()
-    _transport_label = "streamable-HTTP"
-except AttributeError:
-    # Older mcp versions fall back to SSE
-    mcp_asgi = mcp.sse_app()
-    _transport_label = "SSE"
+from mcp.server.sse import SseServerTransport  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
+from starlette.routing import Mount, Route, Router  # noqa: E402
 
 
-@asynccontextmanager
-async def lifespan(app):
-    async with mcp.session_manager.run():
-        yield
-
-
-app = FastAPI(title="Garmin MCP Server", version="1.1.0", redirect_slashes=False, lifespan=lifespan)
-
-
-@app.get("/health", response_class=JSONResponse)
-async def health_check():
-    """
-    Liveness / readiness probe.
-
-    Returns InfluxDB connectivity status, last recorded activity timestamp,
-    available measurements, and the MCP endpoint URL.
-    """
+async def _health_response() -> dict:
     connected = await asyncio.to_thread(influx.ping)
     influx_status = "connected" if connected else "unreachable"
 
@@ -613,43 +602,129 @@ async def health_check():
         "last_activity_timestamp": last_ts,
         "measurements_found": measurements,
         "mcp_endpoint": f"http://{host_display}:{MCP_PORT}/mcp",
+        "sse_endpoint": f"http://{host_display}:{MCP_PORT}/sse",
     }
 
 
-app.mount("/", mcp_asgi)
+# ── Streamable HTTP (/mcp) ────────────────────────────────────────────────
+mcp_asgi = mcp.streamable_http_app()
+
+
+@asynccontextmanager
+async def lifespan(a):  # type: ignore[misc]
+    async with mcp.session_manager.run():
+        yield
+
+
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse(await _health_response())
+
+
+# ── SSE transport (/sse + /messages/) ────────────────────────────────────
+# Pure ASGI callables — no framework wrapper, no response serialization.
+_sse = SseServerTransport("/messages/")
+
+
+async def _sse_handler(scope, receive, send):
+    async with _sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
+        await mcp._mcp_server.run(
+            read_stream,
+            write_stream,
+            mcp._mcp_server.create_initialization_options(),
+        )
+
+
+async def _messages_handler(scope, receive, send):
+    await _sse.handle_post_message(scope, receive, send)
+
+
+# ── Root ASGI app ────────────────────────────────────────────────────────
+# Routes checked in order: SSE first (exact-path Route), then /health,
+# then streamable-HTTP catch-all (Mount).
+# Route.app is overridden because the constructor wraps the endpoint in
+# request_response(), but our SSE handlers are raw ASGI callables.
+_sse_route = Route("/sse", endpoint=lambda _: None, name="sse", methods=["GET"])
+_sse_route.app = _sse_handler
+
+_msg_route = Route("/messages/", endpoint=_messages_handler, methods=["POST"])
+_msg_route.app = _messages_handler
+_msg_route2 = Route("/messages", endpoint=_messages_handler, methods=["POST"])
+_msg_route2.app = _messages_handler
+_msg_route.app = _messages_handler
+
+app = root_app = Router(
+    routes=[
+        _sse_route,
+        _msg_route,
+        _msg_route2,
+        Route("/health", endpoint=health_check, methods=["GET"]),
+        Mount("/", app=mcp_asgi),   # streamable-HTTP catch-all
+    ],
+    lifespan=lifespan,
+)
 
 
 # ---------------------------------------------------------------------------
 # Startup banner
 # ---------------------------------------------------------------------------
-def _print_banner():
+def _print_banner() -> None:
+    # In stdio mode stdout IS the MCP protocol channel — write only to stderr.
+    out = sys.stderr if MCP_TRANSPORT == "stdio" else sys.stdout
     host_display = "localhost" if MCP_HOST in ("0.0.0.0", "") else MCP_HOST
-    measurements = influx.get_measurements() if influx.ping() else ["<InfluxDB unreachable>"]
-    print()
-    print("=" * 60)
-    print("  Garmin MCP Server")
-    print("=" * 60)
-    print(f"  InfluxDB   : {influx.INFLUXDB_HOST}:{influx.INFLUXDB_PORT}/{influx.INFLUXDB_DATABASE}")
-    print(f"  Measurements found: {measurements}")
-    print(f"  Transport  : {_transport_label}")
-    print(f"  MCP endpoint ready: http://{host_display}:{MCP_PORT}/mcp")
-    print(f"  /health check:      http://{host_display}:{MCP_PORT}/health")
-    print("=" * 60)
-    print()
+
+    try:
+        measurements = influx.get_measurements() if influx.ping() else ["<InfluxDB unreachable>"]
+    except Exception:
+        measurements = ["<error>"]
+
+    def _p(line: str = "") -> None:
+        print(line, file=out)
+
+    _p()
+    _p("=" * 60)
+    _p("  Garmin MCP Server")
+    _p("=" * 60)
+    _p(f"  InfluxDB   : {influx.INFLUXDB_HOST}:{influx.INFLUXDB_PORT}/{influx.INFLUXDB_DATABASE}")
+    _p(f"  Measurements: {measurements}")
+    if MCP_TRANSPORT == "stdio":
+        _p("  Transport  : stdio")
+        _p("  Listening on stdin / stdout (no HTTP server)")
+    else:
+        _p("  Transports : HTTP + SSE (always active)")
+        _p(f"  /mcp  (Streamable HTTP) : http://{host_display}:{MCP_PORT}/mcp")
+        _p(f"  /sse  (SSE, deprecated) : http://{host_display}:{MCP_PORT}/sse")
+        _p(f"  /health                 : http://{host_display}:{MCP_PORT}/health")
+    _p("=" * 60)
+    _p()
 
 
 # ---------------------------------------------------------------------------
 # Entry point
 # ---------------------------------------------------------------------------
 if __name__ == "__main__":
-    import uvicorn  # noqa: E402
+    if MCP_TRANSPORT == "stdio":
+        from mcp.server.stdio import stdio_server  # noqa: E402
 
-    _print_banner()
+        _print_banner()
 
-    uvicorn.run(
-        "server:app",
-        host=MCP_HOST,
-        port=MCP_PORT,
-        reload=False,
-        log_level="info",
-    )
+        async def _run_stdio() -> None:
+            async with stdio_server() as (read_stream, write_stream):
+                await mcp._mcp_server.run(
+                    read_stream,
+                    write_stream,
+                    mcp._mcp_server.create_initialization_options(),
+                )
+
+        asyncio.run(_run_stdio())
+    else:
+        import uvicorn  # noqa: E402
+
+        _print_banner()
+
+        uvicorn.run(
+            "server:app",
+            host=MCP_HOST,
+            port=MCP_PORT,
+            reload=False,
+            log_level="info",
+        )

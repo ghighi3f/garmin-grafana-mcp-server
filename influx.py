@@ -452,6 +452,7 @@ TRAINING_STATUS_MAP: dict[str, str] = {
     "MAINTAINING_2": "Maintaining (High Aerobic Shortage)",
     "MAINTAINING_1": "Maintaining (Balanced)",
     "DETRAINING": "Detraining",
+    "RECOVERY_1": "Recovery (Above Targets - Load too high, scale back duration/frequency)",
 }
 
 

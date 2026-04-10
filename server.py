@@ -574,9 +574,10 @@ async def get_fitness_age_tool(weeks: int = 12) -> dict:
 # FastAPI app — all HTTP transports active simultaneously
 # ---------------------------------------------------------------------------
 from contextlib import asynccontextmanager  # noqa: E402
-from fastapi import FastAPI  # noqa: E402
-from fastapi.responses import JSONResponse  # noqa: E402
 from mcp.server.sse import SseServerTransport  # noqa: E402
+from starlette.requests import Request  # noqa: E402
+from starlette.responses import JSONResponse  # noqa: E402
+from starlette.routing import Mount, Route, Router  # noqa: E402
 
 
 async def _health_response() -> dict:
@@ -610,26 +611,21 @@ mcp_asgi = mcp.streamable_http_app()
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):  # type: ignore[misc]
+async def lifespan(a):  # type: ignore[misc]
     async with mcp.session_manager.run():
         yield
 
 
-app = FastAPI(title="Garmin MCP Server", version="1.1.0", redirect_slashes=False, lifespan=lifespan)
-
-
-@app.get("/health", response_class=JSONResponse)
-async def health_check() -> dict:
-    return await _health_response()
+async def health_check(request: Request) -> JSONResponse:
+    return JSONResponse(await _health_response())
 
 
 # ── SSE transport (/sse + /messages/) ────────────────────────────────────
-# Mounted as pure ASGI apps so the SSE transport owns the ASGI response
-# lifecycle entirely — no "response already completed" RuntimeErrors.
+# Pure ASGI callables — no framework wrapper, no response serialization.
 _sse = SseServerTransport("/messages/")
 
 
-async def _sse_asgi(scope, receive, send):
+async def _sse_handler(scope, receive, send):
     async with _sse.connect_sse(scope, receive, send) as (read_stream, write_stream):
         await mcp._mcp_server.run(
             read_stream,
@@ -638,16 +634,34 @@ async def _sse_asgi(scope, receive, send):
         )
 
 
-async def _messages_asgi(scope, receive, send):
+async def _messages_handler(scope, receive, send):
     await _sse.handle_post_message(scope, receive, send)
 
 
-app.mount("/messages/", _messages_asgi)
-app.mount("/sse", _sse_asgi)
+# ── Root ASGI app ────────────────────────────────────────────────────────
+# Routes checked in order: SSE first (exact-path Route), then /health,
+# then streamable-HTTP catch-all (Mount).
+# Route.app is overridden because the constructor wraps the endpoint in
+# request_response(), but our SSE handlers are raw ASGI callables.
+_sse_route = Route("/sse", endpoint=lambda _: None, name="sse", methods=["GET"])
+_sse_route.app = _sse_handler
 
-# Streamable-HTTP catch-all must come after the more-specific /sse and
-# /messages/ mounts so those paths are not swallowed by the root mount.
-app.mount("/", mcp_asgi)
+_msg_route = Route("/messages/", endpoint=_messages_handler, methods=["POST"])
+_msg_route.app = _messages_handler
+_msg_route2 = Route("/messages", endpoint=_messages_handler, methods=["POST"])
+_msg_route2.app = _messages_handler
+_msg_route.app = _messages_handler
+
+app = root_app = Router(
+    routes=[
+        _sse_route,
+        _msg_route,
+        _msg_route2,
+        Route("/health", endpoint=health_check, methods=["GET"]),
+        Mount("/", app=mcp_asgi),   # streamable-HTTP catch-all
+    ],
+    lifespan=lifespan,
+)
 
 
 # ---------------------------------------------------------------------------

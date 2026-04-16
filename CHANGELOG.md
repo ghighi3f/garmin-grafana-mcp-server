@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.5.0] - 2026-04-16
+
+### Fixed
+
+- **Daily metrics shifted one day into the past for UTC+ users** — garmin-grafana
+  anchors daily measurements (DailyStats, SleepSummary, etc.) to local midnight
+  (e.g., `21:00:00Z` for UTC+3 EEST), but the MCP server was naively truncating
+  UTC timestamps to extract dates, causing all daily data to be assigned to the
+  previous UTC day. Added `QUERY_TIMEZONE` environment variable to shift query
+  day boundaries and date extraction to match the user's local timezone. Set
+  `QUERY_TIMEZONE` to the same value as `USER_TIMEZONE` in garmin-grafana.
+  Default `"UTC"` preserves existing behaviour — UTC users see no change.
+
+  **Changes:**
+  - New `QUERY_TIMEZONE` env var (IANA identifier, e.g., `Europe/Athens`).
+  - `_utc_to_local_date()` helper for timezone-aware date extraction in normalizers.
+  - Injected `tz()` clause into all 7 `GROUP BY time()` queries (daily + weekly).
+  - Fixed "today" boundary computation in stress/body battery intraday queries.
+  - Activity queries (which use actual event timestamps) unaffected.
+
 ## [1.4.0] - 2026-04-10
 
 ### Changed

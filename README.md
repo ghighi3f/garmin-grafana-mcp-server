@@ -211,6 +211,7 @@ Edit `.env` to match your garmin-grafana setup. The most important values:
 | `INFLUXDB_PASSWORD` | *(see .env.example)* | InfluxDB password from your garmin-grafana `.env` |
 | `INFLUXDB_VERSION` | `1` | `1` for InfluxDB v1; `2` for InfluxDB v2 |
 | `MCP_PORT` | `8765` | Port the MCP server listens on |
+| `QUERY_TIMEZONE` | `UTC` | IANA timezone — must match `USER_TIMEZONE` in garmin-grafana (see [Timezone](#timezone)) |
 
 > **Note:** `INFLUXDB_HOST` is overridden to `influxdb` directly in `docker-compose.yml` so the container resolves the InfluxDB service by its Docker network name. You do not need to set it in `.env` for the Docker deployment.
 
@@ -754,6 +755,28 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `MCP_PORT` | `8765` | Bind port |
 | `MCP_TRANSPORT` | `http` | Set to `stdio` for subprocess clients (Claude Desktop, Cursor, Windsurf). Leave unset for all HTTP deployments — both SSE and Streamable HTTP are always active. |
 | `ALLOWED_HOSTS` | *(empty)* | DNS-rebinding allow-list (e.g. `pi5.local:*,localhost:*`) |
+
+### Timezone
+
+| Variable | Default | Description |
+|---|---|---|
+| `QUERY_TIMEZONE` | `UTC` | IANA timezone for daily-aggregate queries. Must match `USER_TIMEZONE` in garmin-grafana. |
+
+garmin-grafana stores daily measurements (DailyStats, SleepSummary, etc.) with timestamps anchored to **local midnight**. For a UTC+3 user, local midnight is `21:00:00Z` — without timezone correction the MCP server assigns these records to the previous UTC date, shifting every daily metric one day into the past.
+
+Set `QUERY_TIMEZONE` to the same value as `USER_TIMEZONE` in your garmin-grafana `.env`:
+
+```env
+# garmin-grafana .env
+USER_TIMEZONE=Europe/Athens
+
+# garmin-grafana-mcp-server .env
+QUERY_TIMEZONE=Europe/Athens
+```
+
+This injects InfluxQL's `tz()` clause into daily and weekly aggregate queries and converts timestamps to local dates in the normalizer layer. Activity queries (which use actual event timestamps) are not affected.
+
+> **UTC users:** No action needed — the default `UTC` preserves existing behaviour.
 
 ---
 

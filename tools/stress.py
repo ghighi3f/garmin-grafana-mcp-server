@@ -8,7 +8,7 @@ Pure data retrieval — no planning logic.
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any
 
 import influx
@@ -139,8 +139,8 @@ async def get_stress_body_battery(days: int = 7) -> dict[str, Any]:
         }
 
     # Synthesise today from intraday if DailyStats lacks it
-    today_utc = datetime.now(timezone.utc).date().isoformat()
-    has_today = any(row.get("date") == today_utc for row in daily_rows)
+    today_local = datetime.now(influx.QUERY_TZ).date().isoformat()
+    has_today = any(row.get("date") == today_local for row in daily_rows)
 
     if not has_today:
         try:
@@ -151,7 +151,7 @@ async def get_stress_body_battery(days: int = 7) -> dict[str, Any]:
         except Exception:
             stress_intraday, bb_intraday = [], []
 
-        today_row = _synthesize_today_row(today_utc, stress_intraday, bb_intraday)
+        today_row = _synthesize_today_row(today_local, stress_intraday, bb_intraday)
         if today_row:
             daily_rows.insert(0, today_row)  # prepend (newest-first)
 
@@ -188,7 +188,7 @@ async def get_stress_body_battery(days: int = 7) -> dict[str, Any]:
 
         result_days.append({
             "date": date,
-            "source": "intraday" if date == today_utc and not has_today else "daily_stats",
+            "source": "intraday" if date == today_local and not has_today else "daily_stats",
             "stress": {
                 "high_min": high,
                 "medium_min": med,

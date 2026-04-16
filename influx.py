@@ -10,6 +10,7 @@ import threading
 import atexit
 from datetime import datetime, timezone
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from utils import pick, safe_float, safe_int
 
@@ -33,6 +34,18 @@ INFLUXDB_PASSWORD = os.getenv("INFLUXDB_PASSWORD", "adminpassword")
 INFLUXDB_VERSION = int(os.getenv("INFLUXDB_VERSION", 1))
 INFLUXDB_ORG = os.getenv("INFLUXDB_ORG", "")           # v2 only
 INFLUXDB_TOKEN = os.getenv("INFLUXDB_TOKEN", "")       # v2 only
+
+# Timezone for daily-aggregate queries.  Must be an IANA identifier
+# (e.g. "Europe/Athens", "America/New_York").  Default "UTC" preserves
+# existing behaviour.  Set this to match USER_TIMEZONE in garmin-grafana.
+_QUERY_TZ_NAME = os.getenv("QUERY_TIMEZONE", "UTC")
+try:
+    QUERY_TZ = ZoneInfo(_QUERY_TZ_NAME)
+except Exception as exc:
+    raise ValueError(
+        f"QUERY_TIMEZONE={_QUERY_TZ_NAME!r} is not a valid IANA timezone. "
+        f"Examples: Europe/Athens, America/New_York, UTC"
+    ) from exc
 
 # Measurement names — override if your garmin-grafana schema differs
 MEASUREMENT_ACTIVITIES = os.getenv("MEASUREMENT_ACTIVITIES", "ActivitySummary")
@@ -195,6 +208,27 @@ def sanitize_sport_type(sport_type: str | None) -> str | None:
     return cleaned
 
 
+def _utc_to_local_date(ts) -> str | None:
+    """Convert a UTC timestamp to a YYYY-MM-DD string in QUERY_TIMEZONE.
+
+    Accepts datetime objects or ISO-format strings.  Returns None if ts is
+    falsy.  When QUERY_TIMEZONE is UTC this is equivalent to str(ts)[:10].
+    """
+    if not ts:
+        return None
+    if isinstance(ts, str):
+        # Parse ISO string — handles both '2026-04-15T21:00:00Z' and
+        # '2026-04-15T21:00:00+00:00' formats from InfluxDB.
+        ts = ts.replace("Z", "+00:00")
+        try:
+            ts = datetime.fromisoformat(ts)
+        except (ValueError, TypeError):
+            return str(ts)[:10]
+    if ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    return ts.astimezone(QUERY_TZ).strftime("%Y-%m-%d")
+
+
 def normalise_activity(row: dict) -> dict:
     """
     Map raw InfluxDB field names (which vary across garmin-grafana versions)
@@ -312,9 +346,7 @@ def normalise_activity(row: dict) -> dict:
 def normalise_daily_stats(row: dict) -> dict:
     """Map raw DailyStats fields to canonical schema with friendly units."""
     ts = row.get("time") or row.get("_time")
-    if ts and hasattr(ts, "isoformat"):
-        ts = ts.isoformat()
-    date_str = str(ts)[:10] if ts else None
+    date_str = _utc_to_local_date(ts)
 
     high_stress = safe_float(pick(row, "highStressDuration", "high_stress_duration"))
     med_stress = safe_float(pick(row, "mediumStressDuration", "medium_stress_duration"))
@@ -372,9 +404,7 @@ def normalise_daily_stats(row: dict) -> dict:
 def normalise_sleep(row: dict) -> dict:
     """Map raw SleepSummary fields to canonical schema. Seconds -> hours."""
     ts = row.get("time") or row.get("_time")
-    if ts and hasattr(ts, "isoformat"):
-        ts = ts.isoformat()
-    date_str = str(ts)[:10] if ts else None
+    date_str = _utc_to_local_date(ts)
 
     def _secs_to_hours(val):
         f = safe_float(val)
@@ -693,7 +723,7 @@ def query_resting_hr_weekly(weeks: int) -> list[dict]:
                 f'SELECT MEAN("{FIELD_RESTING_HR}") AS avg_rhr '
                 f'FROM "{MEASUREMENT_RESTING_HR}" '
                 f'WHERE time >= now() - {days}d '
-                f'GROUP BY time(1w) fill(none)'
+                f"GROUP BY time(1w) fill(none) tz('{_QUERY_TZ_NAME}')"
             )
             return _v1_query(q)
     except Exception as exc:
@@ -723,7 +753,7 @@ def query_hrv_weekly(weeks: int) -> list[dict]:
                 f'SELECT MEAN("{FIELD_HRV}") AS avg_hrv '
                 f'FROM "{MEASUREMENT_HRV}" '
                 f'WHERE time >= now() - {days}d '
-                f'GROUP BY time(1w) fill(none)'
+                f"GROUP BY time(1w) fill(none) tz('{_QUERY_TZ_NAME}')"
             )
             return _v1_query(q)
     except Exception as exc:
@@ -763,13 +793,14 @@ def query_daily_stats(days: int) -> list[dict]:
 
 
 def query_stress_intraday_today() -> list[dict]:
-    """Return raw StressIntraday readings from UTC midnight today to now.
+    """Return raw StressIntraday readings from local midnight today to now.
 
     Returns [] silently if the measurement doesn't exist or has no data.
     """
     today_start = (
-        datetime.now(timezone.utc)
+        datetime.now(QUERY_TZ)
         .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
     try:
@@ -795,13 +826,14 @@ def query_stress_intraday_today() -> list[dict]:
 
 
 def query_body_battery_intraday_today() -> list[dict]:
-    """Return raw BodyBatteryIntraday readings from UTC midnight today to now.
+    """Return raw BodyBatteryIntraday readings from local midnight today to now.
 
     Returns [] silently if the measurement doesn't exist or has no data.
     """
     today_start = (
-        datetime.now(timezone.utc)
+        datetime.now(QUERY_TZ)
         .replace(hour=0, minute=0, second=0, microsecond=0)
+        .astimezone(timezone.utc)
         .strftime("%Y-%m-%dT%H:%M:%SZ")
     )
     try:
@@ -993,7 +1025,7 @@ def query_vo2max_weekly(weeks: int) -> list[dict]:
                 f'LAST("{FIELD_VO2_MAX_CYCLING}") AS vo2max_cycling '
                 f'FROM "{MEASUREMENT_VO2_MAX}" '
                 f'WHERE time >= now() - {days}d '
-                f'GROUP BY time(1w) fill(none)'
+                f"GROUP BY time(1w) fill(none) tz('{_QUERY_TZ_NAME}')"
             )
             return _v1_query(q)
     except Exception as exc:
@@ -1022,7 +1054,7 @@ def query_race_predictions_weekly(weeks: int) -> list[dict]:
                 f'LAST("{FIELD_RACE_MARATHON}") AS time_marathon '
                 f'FROM "{MEASUREMENT_RACE_PREDICTIONS}" '
                 f'WHERE time >= now() - {days}d '
-                f'GROUP BY time(1w) fill(none)'
+                f"GROUP BY time(1w) fill(none) tz('{_QUERY_TZ_NAME}')"
             )
             return _v1_query(q)
     except Exception as exc:
@@ -1048,7 +1080,7 @@ def query_weight_weekly(weeks: int) -> list[dict]:
                 f'SELECT LAST("{FIELD_WEIGHT}") AS weight '
                 f'FROM "{MEASUREMENT_BODY_COMPOSITION}" '
                 f'WHERE time >= now() - {days}d '
-                f'GROUP BY time(1w) fill(none)'
+                f"GROUP BY time(1w) fill(none) tz('{_QUERY_TZ_NAME}')"
             )
             return _v1_query(q)
     except Exception as exc:
@@ -1391,7 +1423,7 @@ def query_sleep_intraday_aggregated(days: int) -> list[dict]:
                 f'COUNT("{FIELD_SLEEP_HR}") AS epoch_count '
                 f'FROM "{MEASUREMENT_SLEEP_INTRADAY}" '
                 f'WHERE time >= now() - {days}d '
-                f'GROUP BY time(1d) fill(none)'
+                f"GROUP BY time(1d) fill(none) tz('{_QUERY_TZ_NAME}')"
             )
             raw = _v1_query(q)
             return [_normalise_sleep_physiology(r) for r in raw if r.get("epoch_count")]
@@ -1409,7 +1441,9 @@ def _aggregate_sleep_intraday_by_day(raw: list[dict]) -> list[dict]:
         ts = row.get("_time") or row.get("time")
         if not ts:
             continue
-        day_str = str(ts)[:10]
+        day_str = _utc_to_local_date(ts)
+        if not day_str:
+            continue
         by_day[day_str].append(row)
 
     results = []
@@ -1450,7 +1484,7 @@ def _aggregate_sleep_intraday_by_day(raw: list[dict]) -> list[dict]:
 def _normalise_sleep_physiology(row: dict) -> dict:
     """Map aggregated SleepIntraday row (from GROUP BY time(1d)) to canonical dict."""
     ts = row.get("time") or row.get("_time")
-    date_str = str(ts)[:10] if ts else None
+    date_str = _utc_to_local_date(ts)
 
     return {
         "date": date_str,
@@ -1507,7 +1541,7 @@ def query_fitness_age_weekly(weeks: int) -> list[dict]:
                 f'LAST("{FIELD_ACHIEVABLE_FITNESS_AGE}") AS achievable_age '
                 f'FROM "{MEASUREMENT_FITNESS_AGE}" '
                 f'WHERE time >= now() - {days}d '
-                f'GROUP BY time(1w) fill(none)'
+                f"GROUP BY time(1w) fill(none) tz('{_QUERY_TZ_NAME}')"
             )
             raw = _v1_query(q)
         return raw

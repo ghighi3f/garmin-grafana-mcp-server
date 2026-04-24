@@ -467,7 +467,7 @@ Merges SleepSummary + DailyStats per date for a holistic recovery view.
 
 ### `get_activity_details`
 
-Detailed breakdown of a single activity: HR zones, training effect, per-lap splits, and analysis hints (fastest/slowest lap, HR drift).
+Detailed breakdown of a single activity: HR zones, training effect, per-lap splits, and analysis hints (fastest/slowest lap, HR drift). For activities with a power meter, also returns `max_power`, `avg_power_pedaling_only`, and `standing_duration_seconds` per lap.
 
 | Parameter | Type | Description |
 |---|---|---|
@@ -648,6 +648,65 @@ Returns weekly-sampled fitness age trajectory — a single metric for long-term 
 
 ---
 
+### `get_peak_power`
+
+Returns rolling-window peak power efforts for a single activity, computed from per-second `ActivityGPS.Power` data. Requires a power meter.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `activity_id` | str | Activity ID from `get_recent_activities` |
+
+**Returns:**
+
+| Field | Description |
+|---|---|
+| `peak_powers` | Best average watts over 1s / 5s / 10s / 30s / 60s / 5min / 20min windows |
+| `avg_power_total` | Mean watts including coasting (0 W) — matches Garmin display |
+| `avg_power_pedaling_only` | Mean watts when Power > 0 (excludes coasting) |
+| `coasting_pct` | Percentage of samples at 0 W |
+| `total_work_kj` | Total mechanical work in kilojoules (from `Accumulated_Power`) |
+| `data_points` | Number of 1-second GPS samples |
+
+> The 20-minute peak is the standard input for FTP estimation (multiply by 0.95).
+
+### `get_power_zones`
+
+Returns time-in-zone distribution using the Coggan 7-zone model, computed from per-second `ActivityGPS.Power` data. Coasting (0 W) is excluded from zone percentages and reported separately.
+
+| Parameter | Type | Default | Description |
+|---|---|---|---|
+| `activity_id` | str | — | Activity ID |
+| `ftp` | float | `211.0` | Functional Threshold Power in watts |
+
+**Zone boundaries:**
+
+| Zone | Label | Range |
+|---|---|---|
+| Zone 1 | Active Recovery | < 55% FTP |
+| Zone 2 | Endurance | 55–75% FTP |
+| Zone 3 | Tempo | 75–90% FTP |
+| Zone 4 | Threshold | 90–105% FTP |
+| Zone 5 | VO2 Max | 105–120% FTP |
+| Zone 6 | Anaerobic | 120–150% FTP |
+| Zone 7 | Neuromuscular | > 150% FTP |
+
+**Returns per zone:** `minutes`, `pct_of_power_time`, `min_watts`, `max_watts`. Also returns `coasting_minutes`, `total_power_minutes`, and `ftp_used`.
+
+### `get_power_history`
+
+Returns per-session power summary for activities in the last N days that have power data. Uses bulk queries only — no per-activity round-trips.
+
+| Parameter | Type | Default | Range / Values |
+|---|---|---|---|
+| `days` | int | `30` | 1–90 |
+| `sport_type` | str | `"all"` | Any Garmin sport type or `"all"` |
+
+**Returns per activity:** activity ID, timestamp, sport, distance, duration, `avg_power`, `total_work_kj`, training load, aerobic TE, anaerobic TE.
+
+**Summary:** `avg_power_trend` ("improving"/"declining"/"stable"), `best_avg_power_session`, `total_work_kj`, `period_avg_power`.
+
+---
+
 ## Example prompts
 
 ```
@@ -673,6 +732,12 @@ Returns weekly-sampled fitness age trajectory — a single metric for long-term 
 "What are my all-time personal records for cycling and running?"
 
 "What is my current training status? Am I overloading or undertraining?"
+
+"What were my peak 5-minute and 20-minute power numbers on today's ride?"
+
+"Show me my Coggan power zone distribution for the last ride. How much time in Z2 vs Z4+?"
+
+"Has my average power been improving or declining over the last month of rides?"
 ```
 
 ---
@@ -801,7 +866,8 @@ garmin-grafana-mcp-server/
 │   ├── sleep_physiology.py — get_sleep_physiology
 │   ├── activity_load.py   — get_activity_load_history
 │   ├── energy_balance.py  — get_daily_energy_balance
-│   └── fitness_age.py     — get_fitness_age
+│   ├── fitness_age.py     — get_fitness_age
+│   └── power.py           — get_peak_power, get_power_zones, get_power_history
 ├── Dockerfile
 ├── docker-compose.yml     — Docker deployment (external garmin-grafana network)
 ├── .env.example           — Configuration template

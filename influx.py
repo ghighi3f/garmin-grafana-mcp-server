@@ -61,6 +61,7 @@ MEASUREMENT_ACTIVITY_GPS = os.getenv("MEASUREMENT_ACTIVITY_GPS", "ActivityGPS")
 MEASUREMENT_VO2_MAX = os.getenv("MEASUREMENT_VO2_MAX", "VO2_Max")
 MEASUREMENT_RACE_PREDICTIONS = os.getenv("MEASUREMENT_RACE_PREDICTIONS", "RacePredictions")
 MEASUREMENT_BODY_COMPOSITION = os.getenv("MEASUREMENT_BODY_COMPOSITION", "BodyComposition")
+MEASUREMENT_CYCLING_DYNAMICS = os.getenv("MEASUREMENT_CYCLING_DYNAMICS", "CyclingDynamics")
 
 # Intraday measurements for live "today" data
 MEASUREMENT_STRESS_INTRADAY = os.getenv("MEASUREMENT_STRESS_INTRADAY", "StressIntraday")
@@ -1608,3 +1609,39 @@ def query_activity_load_history(days: int, sport_type: str | None, limit: int) -
         a for a in (normalise_activity(r) for r in deduped)
         if a.get("sport_type") != "no activity"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Cycling dynamics query
+# ---------------------------------------------------------------------------
+
+def query_cycling_dynamics(activity_id: str) -> dict:
+    """
+    Return cycling dynamics for one activity from the CyclingDynamics measurement.
+
+    Written by the garmin-grafana CyclingDynamics patch — requires a
+    compatible Garmin power meter (Rally, Vector, or similar).
+
+    Returns the first (deduplicated) row dict, or {} if no data.
+    Silently returns {} on any connection / query error.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_CYCLING_DYNAMICS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+            '''
+            rows = _dedup_rows(_v2_query(q))
+        else:
+            q = (
+                f'SELECT * FROM "{MEASUREMENT_CYCLING_DYNAMICS}" '
+                f"WHERE \"ActivityID\" = '{activity_id}'"
+            )
+            rows = _dedup_rows(_v1_query(q))
+        return rows[0] if rows else {}
+    except Exception as exc:
+        logger.warning("query_cycling_dynamics failed: %s", exc)
+        return {}

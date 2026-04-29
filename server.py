@@ -10,7 +10,7 @@ All HTTP transports are always active simultaneously:
 For local subprocess clients (Claude Desktop, Cursor, Windsurf, Claude Code):
   set MCP_TRANSPORT=stdio and run with `python server.py` (no HTTP server).
 
-All fifteen MCP tools work identically across every transport.
+All sixteen MCP tools work identically across every transport.
 
 Tools:
   • get_last_activity
@@ -24,10 +24,11 @@ Tools:
   • get_stress_body_battery
   • get_personal_records
   • get_training_status
-  • get_sleep_physiology       (NEW — overnight autonomic deep-dive)
-  • get_activity_load_history  (NEW — per-session load attribution)
-  • get_daily_energy_balance   (NEW — non-training recovery context)
-  • get_fitness_age            (NEW — long-term base-building compass)
+  • get_sleep_physiology       (overnight autonomic deep-dive)
+  • get_activity_load_history  (per-session load attribution)
+  • get_daily_energy_balance   (non-training recovery context)
+  • get_fitness_age            (long-term base-building compass)
+  • get_cycling_dynamics       (NP, TSS, IF, L/R balance, pedaling metrics)
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -76,6 +77,7 @@ from tools.sleep_physiology import get_sleep_physiology  # noqa: E402
 from tools.activity_load import get_activity_load_history  # noqa: E402
 from tools.energy_balance import get_daily_energy_balance  # noqa: E402
 from tools.fitness_age import get_fitness_age  # noqa: E402
+from tools.cycling_dynamics import get_cycling_dynamics  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -568,6 +570,37 @@ async def get_fitness_age_tool(weeks: int = 12) -> dict:
         fitness_age_gap_change, improvement_potential_change.
     """
     return await get_fitness_age(weeks=weeks)
+
+
+@mcp.tool()
+async def get_cycling_dynamics_tool(activity_id: str) -> dict:
+    """
+    Return cycling dynamics for a single activity.
+
+    Requires the garmin-grafana CyclingDynamics patch and a compatible
+    Garmin power meter (Rally, Vector, or similar pedal-based power meter).
+    Returns a descriptive data_note gracefully when data is unavailable.
+
+    Parameters
+    ----------
+    activity_id : str
+        The activity ID.  Discoverable from get_recent_activities_tool
+        (each activity includes an activity_id field).
+
+    Returns
+    -------
+    power
+        normalized_power (W), training_stress_score, intensity_factor,
+        left_right_balance ({left_pct, right_pct}).
+    left_pedal / right_pedal
+        torque_effectiveness (%), pedal_smoothness (%),
+        platform_center_offset_mm,
+        power_phase {start_deg, end_deg},
+        power_phase_peak {start_deg, end_deg}.
+    data_note
+        Present instead of the above when no CyclingDynamics data is found.
+    """
+    return await get_cycling_dynamics(activity_id=activity_id)
 
 
 # ---------------------------------------------------------------------------

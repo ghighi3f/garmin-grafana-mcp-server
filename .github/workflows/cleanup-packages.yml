@@ -16,10 +16,9 @@ jobs:
       - name: Run container retention policy
         uses: snok/container-retention-policy@v2.0.0
         with:
-          account: ${{ github.repository_owner }}
+          account-type: PERSONAL
           token: ${{ secrets.GITHUB_TOKEN }}
           cut-off: 30d
-          delete_untagged: true
-          keep-n-most-recent: 0
+          untagged-only: true
+          keep-at-least: 0
           timestamp-to-use: 'updated_at'
-          dry-run: false

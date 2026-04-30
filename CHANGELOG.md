@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-30
+
+### Added
+
+- **`get_cycling_dynamics_tool`** — new MCP tool (19th) exposing pedaling
+  efficiency metrics from the `CyclingDynamics` measurement added by the
+  [garmin-grafana CyclingDynamics patch](https://github.com/arpanghosh8453/garmin-grafana).
+  Requires a compatible pedal-based power meter (Garmin Rally, Vector, or similar).
+  Returns per-activity:
+  - **Power** — Normalized Power (W), Training Stress Score, Intensity Factor,
+    left/right power balance (%).
+  - **Left pedal** — torque effectiveness (%), pedal smoothness (%),
+    platform center offset (mm), power phase start/end (°), peak power phase
+    start/end (°).
+  - **Right pedal** — same structure as left pedal.
+  - **Graceful fallback** — returns a descriptive `data_note` when the
+    `CyclingDynamics` measurement is absent or empty (safe for all users,
+    regardless of whether the patch is installed or a power meter is paired).
+  - New query function `query_cycling_dynamics()` in `influx.py`.
+  - New env var `MEASUREMENT_CYCLING_DYNAMICS` (default: `CyclingDynamics`).
+  - New tool module: `tools/cycling_dynamics.py`.
+
 ## [1.6.0] - 2026-04-24
 
 ### Added

@@ -646,6 +646,19 @@ Returns weekly-sampled fitness age trajectory — a single metric for long-term 
 
 **Trends:** `fitness_age_change`, `fitness_age_gap_change`, `improvement_potential_change` (delta oldest → newest).
 
+### `get_cycling_dynamics`
+
+Returns advanced pedaling efficiency metrics for a single activity. Requires the [garmin-grafana CyclingDynamics patch](https://github.com/arpanghosh8453/garmin-grafana) and a compatible pedal-based power meter (Garmin Rally, Vector, or similar). Returns a graceful `data_note` when data is unavailable — safe to call for any activity.
+
+| Parameter | Type | Description |
+|---|---|---|
+| `activity_id` | str | Activity ID from `get_recent_activities` |
+
+**Returns:**
+- `power` — `normalized_power` (W), `training_stress_score`, `intensity_factor`, `left_right_balance` (`{left_pct, right_pct}`)
+- `left_pedal` / `right_pedal` — `torque_effectiveness` (%), `pedal_smoothness` (%), `platform_center_offset_mm`, `power_phase {start_deg, end_deg}`, `power_phase_peak {start_deg, end_deg}`
+- `data_note` — present instead of the above when no CyclingDynamics data is found
+
 ---
 
 ## Example prompts
@@ -701,6 +714,7 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `MEASUREMENT_TRAINING_READINESS` | `TrainingReadiness` |
 | `MEASUREMENT_SLEEP_INTRADAY` | `SleepIntraday` |
 | `MEASUREMENT_FITNESS_AGE` | `FitnessAge` |
+| `MEASUREMENT_CYCLING_DYNAMICS` | `CyclingDynamics` |
 
 ### Field names
 
@@ -802,6 +816,7 @@ garmin-grafana-mcp-server/
 │   ├── activity_load.py   — get_activity_load_history
 │   ├── energy_balance.py  — get_daily_energy_balance
 │   └── fitness_age.py     — get_fitness_age
+│   └── cycling_dynamics.py — get_cycling_dynamics
 ├── Dockerfile
 ├── docker-compose.yml     — Docker deployment (external garmin-grafana network)
 ├── .env.example           — Configuration template

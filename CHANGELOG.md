@@ -7,6 +7,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-04-29
+
+### Added
+
+- **`get_cycling_dynamics_tool`** — new MCP tool (16th) exposing pedaling
+  efficiency metrics from the `CyclingDynamics` measurement added by the
+  [garmin-grafana CyclingDynamics patch](https://github.com/arpanghosh8453/garmin-grafana).
+  Requires a compatible pedal-based power meter (Garmin Rally, Vector, or
+  similar).  Returns per-activity:
+  - **Power** — Normalized Power (W), Training Stress Score, Intensity Factor,
+    left/right power balance (%).
+  - **Left pedal** — torque effectiveness (%), pedal smoothness (%),
+    platform center offset (mm), power phase start/end (°), peak power phase
+    start/end (°).
+  - **Right pedal** — same structure as left pedal.
+  - **Graceful fallback** — returns a descriptive `data_note` when the
+    `CyclingDynamics` measurement is absent or empty (safe for all users,
+    regardless of whether the patch is installed or a power meter is paired).
+  - New query function `query_cycling_dynamics()` in `influx.py` using the
+    `ActivityID` tag (consistent with `ActivityLap`, `ActivityGPS`, and
+    `ActivitySession` — real Garmin Connect ID on normal daily sync).
+  - New env var `MEASUREMENT_CYCLING_DYNAMICS` (default: `CyclingDynamics`).
+  - New tool module: `tools/cycling_dynamics.py`.
+
+- **`QUERY_TIMEZONE` env var** — timezone-aware daily aggregate queries.
+  Set to an IANA identifier matching `USER_TIMEZONE` in garmin-grafana (e.g.
+  `Europe/Athens`).  Without this, users in non-UTC timezones saw daily metrics
+  (sleep, stress, steps) assigned to the wrong calendar date because
+  garmin-grafana anchors daily rows to local midnight.  Injects InfluxQL's
+  `tz()` clause into daily and weekly aggregate queries; activity queries
+  (which use actual event timestamps) are unaffected.  Default `UTC`
+  preserves existing behaviour — no action required for UTC users.
+
 ## [1.4.0] - 2026-04-10
 
 ### Changed

@@ -10,7 +10,7 @@ All HTTP transports are always active simultaneously:
 For local subprocess clients (Claude Desktop, Cursor, Windsurf, Claude Code):
   set MCP_TRANSPORT=stdio and run with `python server.py` (no HTTP server).
 
-All eighteen MCP tools work identically across every transport.
+All nineteen MCP tools work identically across every transport.
 
 Tools:
   • get_last_activity
@@ -31,6 +31,7 @@ Tools:
   • get_peak_power             (rolling peak efforts from ActivityGPS)
   • get_power_zones            (Coggan 7-zone distribution)
   • get_power_history          (per-session power trend)
+  • get_cycling_dynamics       (NP, TSS, IF, L/R balance, pedaling metrics)
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -80,6 +81,7 @@ from tools.activity_load import get_activity_load_history  # noqa: E402
 from tools.energy_balance import get_daily_energy_balance  # noqa: E402
 from tools.fitness_age import get_fitness_age  # noqa: E402
 from tools.power import get_peak_power, get_power_zones, get_power_history  # noqa: E402
+from tools.cycling_dynamics import get_cycling_dynamics  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -665,6 +667,37 @@ async def get_power_history_tool(days: int = 30, sport_type: str = "all") -> dic
         best_avg_power_session, total_work_kj, period_avg_power.
     """
     return await get_power_history(days=days, sport_type=sport_type)
+
+
+@mcp.tool()
+async def get_cycling_dynamics_tool(activity_id: str) -> dict:
+    """
+    Return cycling dynamics for a single activity.
+
+    Requires the garmin-grafana CyclingDynamics patch and a compatible
+    Garmin power meter (Rally, Vector, or similar pedal-based power meter).
+    Returns a descriptive data_note gracefully when data is unavailable.
+
+    Parameters
+    ----------
+    activity_id : str
+        The activity ID.  Discoverable from get_recent_activities_tool
+        (each activity includes an activity_id field).
+
+    Returns
+    -------
+    power
+        normalized_power (W), training_stress_score, intensity_factor,
+        left_right_balance ({left_pct, right_pct}).
+    left_pedal / right_pedal
+        torque_effectiveness (%), pedal_smoothness (%),
+        platform_center_offset_mm,
+        power_phase {start_deg, end_deg},
+        power_phase_peak {start_deg, end_deg}.
+    data_note
+        Present instead of the above when no CyclingDynamics data is found.
+    """
+    return await get_cycling_dynamics(activity_id=activity_id)
 
 
 # ---------------------------------------------------------------------------

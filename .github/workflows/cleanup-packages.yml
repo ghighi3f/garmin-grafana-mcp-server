@@ -13,12 +13,22 @@ jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - name: Run container retention policy
-        uses: snok/container-retention-policy@v2.2.1
-        with:
-          account-type: org
-          token: ${{ secrets.GITHUB_TOKEN }}
-          cut-off: 30d UTC
-          delete-untagged: true
-          keep-n-most-recent: 0
-          timestamp-to-use: updated_at
+      - name: Delete untagged package versions older than 30 days
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          OWNER="${{ github.repository_owner }}"
+          PACKAGE="garmin-grafana-mcp-server"
+          CUTOFF=$(date -u -d '30 days ago' +%Y-%m-%dT%H:%M:%SZ)
+
+          echo "Fetching versions for $OWNER/$PACKAGE older than $CUTOFF..."
+
+          gh api "/user/packages/container/$PACKAGE/versions" \
+            --paginate \
+            --jq '.[] | select(.metadata.container.tags | length == 0) | select(.updated_at < "'"$CUTOFF"'") | .id' \
+          | while read -r id; do
+              echo "Deleting untagged version $id"
+              gh api --method DELETE "/user/packages/container/$PACKAGE/versions/$id" && echo "Deleted $id" || echo "Failed to delete $id"
+            done
+
+          echo "Cleanup complete."

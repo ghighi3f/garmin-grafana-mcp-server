@@ -7,15 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.7.0] - 2026-04-29
+## [1.7.0] - 2026-04-30
 
 ### Added
 
-- **`get_cycling_dynamics_tool`** — new MCP tool (16th) exposing pedaling
+- **`get_cycling_dynamics_tool`** — new MCP tool (19th) exposing pedaling
   efficiency metrics from the `CyclingDynamics` measurement added by the
   [garmin-grafana CyclingDynamics patch](https://github.com/arpanghosh8453/garmin-grafana).
-  Requires a compatible pedal-based power meter (Garmin Rally, Vector, or
-  similar).  Returns per-activity:
+  Requires a compatible pedal-based power meter (Garmin Rally, Vector, or similar).
+  Returns per-activity:
   - **Power** — Normalized Power (W), Training Stress Score, Intensity Factor,
     left/right power balance (%).
   - **Left pedal** — torque effectiveness (%), pedal smoothness (%),
@@ -25,20 +25,89 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **Graceful fallback** — returns a descriptive `data_note` when the
     `CyclingDynamics` measurement is absent or empty (safe for all users,
     regardless of whether the patch is installed or a power meter is paired).
-  - New query function `query_cycling_dynamics()` in `influx.py` using the
-    `ActivityID` tag (consistent with `ActivityLap`, `ActivityGPS`, and
-    `ActivitySession` — real Garmin Connect ID on normal daily sync).
+  - New query function `query_cycling_dynamics()` in `influx.py`.
   - New env var `MEASUREMENT_CYCLING_DYNAMICS` (default: `CyclingDynamics`).
   - New tool module: `tools/cycling_dynamics.py`.
 
-- **`QUERY_TIMEZONE` env var** — timezone-aware daily aggregate queries.
-  Set to an IANA identifier matching `USER_TIMEZONE` in garmin-grafana (e.g.
-  `Europe/Athens`).  Without this, users in non-UTC timezones saw daily metrics
-  (sleep, stress, steps) assigned to the wrong calendar date because
-  garmin-grafana anchors daily rows to local midnight.  Injects InfluxQL's
-  `tz()` clause into daily and weekly aggregate queries; activity queries
-  (which use actual event timestamps) are unaffected.  Default `UTC`
-  preserves existing behaviour — no action required for UTC users.
+## [1.6.0] - 2026-04-24
+
+### Added
+
+- **3 new MCP tools for power meter data** (15 → 18 total), built on per-second
+  `ActivityGPS.Power` and per-lap `ActivityLap.Avg_Power`:
+
+  - **`get_peak_power_tool(activity_id)`** — rolling-window peak efforts using
+    an O(n) sliding-sum algorithm. Returns best average watts over 1s / 5s / 10s /
+    30s / 60s / 5min / 20min windows (20min peak is the standard FTP estimation
+    input), plus avg power total (including coasting zeros, matches Garmin display),
+    avg power pedaling-only (Power > 0), coasting percentage, total work in kJ from
+    `Accumulated_Power`, and sample count.
+
+  - **`get_power_zones_tool(activity_id, ftp)`** — Coggan 7-zone time-in-zone
+    distribution from per-second GPS data. Zone boundaries computed as percentages
+    of the supplied FTP (default 211 W). Coasting (0 W) samples excluded from zone
+    percentages and reported separately as `coasting_minutes`. Returns minutes and
+    percentage per zone, `total_power_minutes`, and the FTP value applied.
+
+  - **`get_power_history_tool(days, sport_type)`** — per-session avg power, total
+    work (kJ), and power trend over the last N days. Uses three bulk queries in
+    parallel (no N+1): ActivitySummary for activity metadata, ActivityLap for
+    duration-weighted avg power, and ActivityGPS `Accumulated_Power` for kJ totals.
+    Summary includes `avg_power_trend` ("improving"/"declining"/"stable"),
+    `best_avg_power_session`, and `period_avg_power`.
+
+- **`max_power` and `avg_power_pedaling_only` in `get_activity_details_tool`** —
+  `ActivityGPS` stats are now fetched as a third concurrent query in
+  `asyncio.gather()` alongside ActivitySession and ActivityLap. The activity summary
+  block now includes `max_power` (peak instantaneous watt) and `avg_power_pedaling_only`
+  (mean watts excluding coasting), in addition to the existing `avg_power`.
+
+- **`standing_duration_seconds` in lap data** — `normalise_lap()` now extracts
+  `Standing_Duration` from ActivityLap (confirmed present in schema). Surfaced in
+  every lap dict returned by `get_activity_details_tool`.
+
+- **New `influx.py` query functions:**
+  - `query_activity_gps_power_raw(activity_id)` — fetches ordered per-second Power
+    samples as `list[int]`; deduplicates by timestamp to handle multi-device writes.
+  - `query_activity_gps_stats(activity_id)` — server-side MAX/MEAN aggregates for
+    a single activity (max power, avg total, avg pedaling, total work kJ, count).
+    Two queries, no raw samples transferred.
+  - `query_lap_power_bulk(days)` — duration-weighted avg power from ActivityLap
+    for a time window; used to backfill `avg_power` for activities where
+    ActivitySummary has no power fields.
+  - `query_power_history_bulk(days)` — bulk `MAX(Accumulated_Power) GROUP BY
+    ActivityID` for kJ totals across a time range.
+
+### Not added (schema investigation)
+
+- **Power dynamics fields** (`Left_Right_Balance`, `Power_Phase_Start/End`,
+  `Platform_Center_Offset`) — confirmed absent from the database via
+  `SHOW FIELD KEYS FROM "ActivityGPS"`. garmin-grafana does not sync these
+  fields from Garmin Connect; no tool added.
+- **Normalized Power (NP)** — raw 1s samples are available but NP requires a
+  30-second rolling mean of 4th-power values, which is too expensive without
+  dedicated server-side support. Already documented as unsupported in existing
+  tool docstrings.
+
+## [1.5.0] - 2026-04-16
+
+### Fixed
+
+- **Daily metrics shifted one day into the past for UTC+ users** — garmin-grafana
+  anchors daily measurements (DailyStats, SleepSummary, etc.) to local midnight
+  (e.g., `21:00:00Z` for UTC+3 EEST), but the MCP server was naively truncating
+  UTC timestamps to extract dates, causing all daily data to be assigned to the
+  previous UTC day. Added `QUERY_TIMEZONE` environment variable to shift query
+  day boundaries and date extraction to match the user's local timezone. Set
+  `QUERY_TIMEZONE` to the same value as `USER_TIMEZONE` in garmin-grafana.
+  Default `"UTC"` preserves existing behaviour — UTC users see no change.
+
+  **Changes:**
+  - New `QUERY_TIMEZONE` env var (IANA identifier, e.g., `Europe/Athens`).
+  - `_utc_to_local_date()` helper for timezone-aware date extraction in normalizers.
+  - Injected `tz()` clause into all 7 `GROUP BY time()` queries (daily + weekly).
+  - Fixed "today" boundary computation in stress/body battery intraday queries.
+  - Activity queries (which use actual event timestamps) unaffected.
 
 ## [1.4.0] - 2026-04-10
 

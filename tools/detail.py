@@ -97,10 +97,11 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
         "training_effect": None,
     }
 
-    # -- 2. ActivitySession + ActivityLap (independent, run concurrently) --
-    session_rows, lap_rows = await asyncio.gather(
+    # -- 2. ActivitySession + ActivityLap + ActivityGPS stats (run concurrently) --
+    session_rows, lap_rows, gps_stats = await asyncio.gather(
         asyncio.to_thread(influx.query_activity_session_by_id, activity_id),
         asyncio.to_thread(influx.query_activity_laps_by_id, activity_id),
+        asyncio.to_thread(influx.query_activity_gps_stats, activity_id),
     )
     if session_rows:
         sess = session_rows[0]
@@ -125,7 +126,18 @@ async def get_activity_details(activity_id: str) -> dict[str, Any]:
     if laps and activity_out.get("avg_power") is None:
         activity_out["avg_power"] = _weighted_avg(laps, "avg_power")
 
-    # -- 5. Analysis hints --
+    # -- 5. Backfill max_power and avg_power_pedaling_only from ActivityGPS --
+    if gps_stats:
+        activity_out["max_power"] = gps_stats.get("max_power")
+        activity_out["avg_power_pedaling_only"] = gps_stats.get("avg_power_pedaling")
+        # Overwrite avg_power with GPS total if laps didn't provide it
+        if activity_out.get("avg_power") is None:
+            activity_out["avg_power"] = gps_stats.get("avg_power_total")
+    else:
+        activity_out["max_power"] = None
+        activity_out["avg_power_pedaling_only"] = None
+
+    # -- 6. Analysis hints --
     analysis = _compute_analysis_hints(laps)
 
     return {

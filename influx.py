@@ -470,6 +470,7 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
         "avg_cadence": safe_float(pick(row, "Avg_Cadence", "avg_cadence")),
         "avg_power": safe_float(pick(row, "Avg_Power", "avg_power")),
         "avg_temperature_c": safe_float(pick(row, "Avg_Temperature", "avg_temperature")),
+        "standing_duration_seconds": safe_float(pick(row, "Standing_Duration", "standing_duration")),
     }
 
 
@@ -1609,6 +1610,283 @@ def query_activity_load_history(days: int, sport_type: str | None, limit: int) -
         a for a in (normalise_activity(r) for r in deduped)
         if a.get("sport_type") != "no activity"
     ]
+
+
+# ---------------------------------------------------------------------------
+# Power-meter query functions
+# ---------------------------------------------------------------------------
+
+def query_activity_gps_power_raw(activity_id: str) -> list[int]:
+    """
+    Return ordered list of per-second Power readings (watts) for one activity.
+
+    Deduplicates by timestamp to handle multi-device writes (Edge + Forerunner).
+    Returns [] silently if ActivityGPS has no data for this activity.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> filter(fn: (r) => r["_field"] == "Power")
+              |> sort(columns: ["_time"], desc: false)
+            '''
+            rows = _v2_query(q)
+            # deduplicate by _time, keep first occurrence
+            seen: set = set()
+            out: list[int] = []
+            for r in rows:
+                ts = r.get("_time")
+                if ts not in seen:
+                    seen.add(ts)
+                    val = safe_int(r.get("_value"))
+                    if val is not None:
+                        out.append(val)
+            return out
+        else:
+            q = (
+                f'SELECT "Power" FROM "{MEASUREMENT_ACTIVITY_GPS}" '
+                f"WHERE \"ActivityID\" = '{activity_id}' "
+                f"ORDER BY time ASC"
+            )
+            rows = _v1_query(q)
+            # deduplicate by timestamp
+            seen_ts: set = set()
+            out2: list[int] = []
+            for r in rows:
+                ts = r.get("time")
+                if ts not in seen_ts:
+                    seen_ts.add(ts)
+                    val = safe_int(r.get("Power"))
+                    if val is not None:
+                        out2.append(val)
+            return out2
+    except Exception as exc:
+        logger.debug("ActivityGPS power raw query failed (non-fatal): %s", exc)
+        return []
+
+
+def query_activity_gps_stats(activity_id: str) -> dict:
+    """
+    Return aggregated power stats for a single activity from ActivityGPS.
+
+    Runs two server-side aggregate queries (overall + pedaling-only) — no raw
+    samples transferred.  Returns {} silently on any failure so the detail
+    tool degrades gracefully for activities without power data.
+
+    Returns keys: max_power, avg_power_total, avg_power_pedaling,
+    total_work_kj, data_points.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            # Overall stats
+            q_all = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> filter(fn: (r) => r["_field"] == "Power" or r["_field"] == "Accumulated_Power")
+              |> group(columns: ["_field"])
+              |> reduce(fn: (r, accumulator) => ({{
+                  max: (if r._value > accumulator.max then r._value else accumulator.max),
+                  sum: accumulator.sum + r._value,
+                  count: accumulator.count + 1,
+              }}), identity: {{max: 0, sum: 0.0, count: 0}})
+            '''
+            # For v2 fall back to separate queries to keep it simple
+            q_max = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> filter(fn: (r) => r["_field"] == "Power")
+              |> max()
+            '''
+            q_mean = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> filter(fn: (r) => r["_field"] == "Power")
+              |> mean()
+            '''
+            q_pedal = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> filter(fn: (r) => r["_field"] == "Power" and r["_value"] > 0)
+              |> mean()
+            '''
+            q_accum = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> filter(fn: (r) => r["_field"] == "Accumulated_Power")
+              |> max()
+            '''
+            q_count = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -3650d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+              |> filter(fn: (r) => r["_field"] == "Power")
+              |> count()
+            '''
+            max_rows = _v2_query(q_max)
+            mean_rows = _v2_query(q_mean)
+            pedal_rows = _v2_query(q_pedal)
+            accum_rows = _v2_query(q_accum)
+            count_rows = _v2_query(q_count)
+
+            max_p = safe_int(max_rows[0].get("_value")) if max_rows else None
+            avg_total = safe_float(mean_rows[0].get("_value")) if mean_rows else None
+            avg_pedal = safe_float(pedal_rows[0].get("_value")) if pedal_rows else None
+            accum_j = safe_float(accum_rows[0].get("_value")) if accum_rows else None
+            n = safe_int(count_rows[0].get("_value")) if count_rows else None
+        else:
+            # InfluxQL: two queries
+            q_all = (
+                f'SELECT MAX("Power") AS max_p, MEAN("Power") AS avg_p, '
+                f'COUNT("Power") AS n, MAX("Accumulated_Power") AS max_accum '
+                f'FROM "{MEASUREMENT_ACTIVITY_GPS}" '
+                f"WHERE \"ActivityID\" = '{activity_id}'"
+            )
+            q_pedal = (
+                f'SELECT MEAN("Power") AS avg_pedal '
+                f'FROM "{MEASUREMENT_ACTIVITY_GPS}" '
+                f"WHERE \"ActivityID\" = '{activity_id}' AND \"Power\" > 0"
+            )
+            all_rows = _v1_query(q_all)
+            pedal_rows = _v1_query(q_pedal)
+
+            if not all_rows:
+                return {}
+            row = all_rows[0]
+            max_p = safe_int(row.get("max_p"))
+            avg_total = safe_float(row.get("avg_p"))
+            accum_j = safe_float(row.get("max_accum"))
+            n = safe_int(row.get("n"))
+            avg_pedal = safe_float(pedal_rows[0].get("avg_pedal")) if pedal_rows else None
+
+        if max_p is None and avg_total is None:
+            return {}
+
+        return {
+            "max_power": max_p,
+            "avg_power_total": round(avg_total, 1) if avg_total is not None else None,
+            "avg_power_pedaling": round(avg_pedal, 1) if avg_pedal is not None else None,
+            "total_work_kj": round(accum_j / 1000.0, 1) if accum_j else None,
+            "data_points": n,
+        }
+    except Exception as exc:
+        logger.debug("ActivityGPS stats query failed (non-fatal): %s", exc)
+        return {}
+
+
+def query_lap_power_bulk(days: int) -> dict[str, float]:
+    """
+    Return {activity_id: weighted_avg_power_watts} from ActivityLap for
+    activities in the last *days* days.
+
+    Duration-weighted across all laps per activity (same logic as
+    _query_all_lap_power but time-scoped to avoid scanning all history).
+    Returns {} silently on failure.
+    """
+    from collections import defaultdict
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -{days}d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_LAP}")
+              |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
+            '''
+            raw = _v2_query(q)
+        else:
+            q = (
+                f'SELECT "ActivityID", "Avg_Power", "Elapsed_Time" '
+                f'FROM "{MEASUREMENT_ACTIVITY_LAP}" '
+                f'WHERE time >= now() - {days}d '
+                f'ORDER BY time ASC'
+            )
+            raw = _v1_query(q)
+    except Exception as exc:
+        logger.debug("Lap power bulk (period) query failed (non-fatal): %s", exc)
+        return {}
+
+    deduped = _dedup_laps(raw)
+
+    by_activity: dict[str, list[dict]] = defaultdict(list)
+    for lap in deduped:
+        aid = lap.get("ActivityID") or lap.get("Activity_ID") or lap.get("activity_id")
+        if aid:
+            by_activity[str(aid)].append(lap)
+
+    result: dict[str, float] = {}
+    for aid, laps in by_activity.items():
+        total_val = 0.0
+        total_dur = 0.0
+        for lap in laps:
+            dur = safe_float(lap.get("Elapsed_Time") or lap.get("elapsed_time"))
+            if not dur or dur <= 0:
+                continue
+            pw = safe_float(lap.get("Avg_Power") or lap.get("avg_power"))
+            if pw is not None and pw > 0:
+                total_val += pw * dur
+                total_dur += dur
+        if total_dur > 0:
+            result[aid] = round(total_val / total_dur, 1)
+    return result
+
+
+def query_power_history_bulk(days: int) -> dict[str, float]:
+    """
+    Return {activity_id: total_work_kj} for all activities in the last *days*
+    days that have GPS accumulated-power data.
+
+    Uses a server-side MAX(Accumulated_Power) GROUP BY ActivityID — no per-
+    activity round-trips.
+    """
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -{days}d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITY_GPS}")
+              |> filter(fn: (r) => r["_field"] == "Accumulated_Power")
+              |> group(columns: ["ActivityID"])
+              |> max()
+            '''
+            raw = _v2_query(q)
+            return {
+                str(r["ActivityID"]): round(float(r["_value"]) / 1000.0, 1)
+                for r in raw
+                if r.get("ActivityID") and r.get("_value") is not None
+            }
+        else:
+            q = (
+                f'SELECT MAX("Accumulated_Power") FROM "{MEASUREMENT_ACTIVITY_GPS}" '
+                f'WHERE time >= now() - {days}d '
+                f'GROUP BY "ActivityID"'
+            )
+            result = _v1_client().query(q)
+            mapping: dict[str, float] = {}
+            for (_meas, tags), points in result.items():
+                if not tags or "ActivityID" not in tags:
+                    continue
+                aid = str(tags["ActivityID"])
+                for point in points:
+                    val = safe_float(point.get("max"))
+                    if val is not None:
+                        mapping[aid] = round(val / 1000.0, 1)
+            return mapping
+    except Exception as exc:
+        logger.debug("Power history bulk query failed (non-fatal): %s", exc)
+        return {}
 
 
 # ---------------------------------------------------------------------------

@@ -10,7 +10,7 @@ All HTTP transports are always active simultaneously:
 For local subprocess clients (Claude Desktop, Cursor, Windsurf, Claude Code):
   set MCP_TRANSPORT=stdio and run with `python server.py` (no HTTP server).
 
-All sixteen MCP tools work identically across every transport.
+All nineteen MCP tools work identically across every transport.
 
 Tools:
   • get_last_activity
@@ -28,6 +28,9 @@ Tools:
   • get_activity_load_history  (per-session load attribution)
   • get_daily_energy_balance   (non-training recovery context)
   • get_fitness_age            (long-term base-building compass)
+  • get_peak_power             (rolling peak efforts from ActivityGPS)
+  • get_power_zones            (Coggan 7-zone distribution)
+  • get_power_history          (per-session power trend)
   • get_cycling_dynamics       (NP, TSS, IF, L/R balance, pedaling metrics)
 
 Also provides a /health REST endpoint and a startup banner.
@@ -77,6 +80,7 @@ from tools.sleep_physiology import get_sleep_physiology  # noqa: E402
 from tools.activity_load import get_activity_load_history  # noqa: E402
 from tools.energy_balance import get_daily_energy_balance  # noqa: E402
 from tools.fitness_age import get_fitness_age  # noqa: E402
+from tools.power import get_peak_power, get_power_zones, get_power_history  # noqa: E402
 from tools.cycling_dynamics import get_cycling_dynamics  # noqa: E402
 
 # ---------------------------------------------------------------------------
@@ -247,11 +251,13 @@ async def get_activity_details_tool(activity_id: str) -> dict:
     -------
     activity
         Core metrics (distance, duration, HR, speed) plus:
-        - hr_zones        : minutes in each zone (1–5)
-        - training_effect : aerobic and anaerobic (0–5 scale)
+        - hr_zones               : minutes in each zone (1–5)
+        - training_effect        : aerobic and anaerobic (0–5 scale)
+        - max_power              : peak watt from ActivityGPS (null if no power meter)
+        - avg_power_pedaling_only: mean watts excluding coasting zeros
     laps
         Per-lap splits: distance_km, elapsed_time_minutes, avg_hr,
-        max_hr, pace or speed, cadence, power.
+        max_hr, pace or speed, cadence, power, standing_duration_seconds.
     analysis_hints
         Pre-computed: fastest/slowest lap index, pace range,
         HR drift percentage (cardiac drift detection).
@@ -570,6 +576,97 @@ async def get_fitness_age_tool(weeks: int = 12) -> dict:
         fitness_age_gap_change, improvement_potential_change.
     """
     return await get_fitness_age(weeks=weeks)
+
+
+@mcp.tool()
+async def get_peak_power_tool(activity_id: str) -> dict:
+    """
+    Return peak rolling-average power efforts for a single activity.
+
+    Computes best average watts over standard cycling analysis windows using
+    a sliding-window algorithm on per-second ActivityGPS data.
+
+    Parameters
+    ----------
+    activity_id : str
+        The activity ID.  Discoverable from get_recent_activities_tool.
+
+    Returns
+    -------
+    peak_powers
+        Best average watt over 1s / 5s / 10s / 30s / 60s / 5min / 20min
+        windows.  20min peak is the standard FTP estimation input.
+    avg_power_total
+        Mean watts including coasting (0W) samples — matches Garmin display.
+    avg_power_pedaling_only
+        Mean watts when Power > 0 — excludes coasting.
+    coasting_pct
+        Percentage of samples at 0W.
+    total_work_kj
+        Total mechanical work in kilojoules from Accumulated_Power.
+    data_points
+        Number of 1-second GPS samples available.
+    """
+    return await get_peak_power(activity_id=activity_id)
+
+
+@mcp.tool()
+async def get_power_zones_tool(activity_id: str, ftp: float = 211.0) -> dict:
+    """
+    Return time-in-zone distribution using Coggan 7-zone power model.
+
+    Buckets per-second ActivityGPS.Power readings into zones relative to FTP.
+    Coasting (0W) is excluded from zone percentages and reported separately.
+
+    Parameters
+    ----------
+    activity_id : str
+        The activity ID.  Discoverable from get_recent_activities_tool.
+    ftp : float
+        Functional Threshold Power in watts.  Default 211.0.
+
+    Returns
+    -------
+    zones
+        List of 7 zone dicts: zone_id, label, min_watts, max_watts,
+        minutes, pct_of_power_time.
+    coasting_minutes
+        Time at 0W (excluded from zone percentages).
+    total_power_minutes
+        Total pedaling time counted across all zones.
+    ftp_used
+        The FTP value applied (echoed back for transparency).
+    """
+    return await get_power_zones(activity_id=activity_id, ftp=ftp)
+
+
+@mcp.tool()
+async def get_power_history_tool(days: int = 30, sport_type: str = "all") -> dict:
+    """
+    Return per-activity power summary for activities in the last N days.
+
+    Only includes activities that have avg_power data (sourced from
+    ActivityLap).  Total work (kJ) comes from ActivityGPS Accumulated_Power
+    via a single bulk query — no per-activity round-trips.
+
+    Parameters
+    ----------
+    days : int
+        Look-back window in days.  Range: 1–90.  Default: 30.
+    sport_type : str
+        Filter by Garmin sport type or "all".  Default: "all".
+
+    Returns
+    -------
+    activities
+        List (newest first): activity_id, timestamp, sport_type,
+        distance_km, duration_minutes, avg_power, total_work_kj,
+        training_load, aerobic_te, anaerobic_te.
+    summary
+        avg_power_trend ("improving"/"declining"/"stable"),
+        best_avg_power_session, total_work_kj, period_avg_power.
+    """
+    return await get_power_history(days=days, sport_type=sport_type)
 
 
 @mcp.tool()

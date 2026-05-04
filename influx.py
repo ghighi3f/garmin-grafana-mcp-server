@@ -129,6 +129,10 @@ FIELD_FITNESS_AGE             = os.getenv("FIELD_FITNESS_AGE",             "fitn
 FIELD_CHRONOLOGICAL_AGE       = os.getenv("FIELD_CHRONOLOGICAL_AGE",       "chronologicalAge")
 FIELD_ACHIEVABLE_FITNESS_AGE  = os.getenv("FIELD_ACHIEVABLE_FITNESS_AGE",  "achievableFitnessAge")
 
+# Lactate threshold (LactateThreshold measurement)
+MEASUREMENT_LACTATE_THRESHOLD      = os.getenv("MEASUREMENT_LACTATE_THRESHOLD",      "LactateThreshold")
+FIELD_LACTATE_THRESHOLD_HR_RUNNING = os.getenv("FIELD_LACTATE_THRESHOLD_HR_RUNNING", "HeartRateThreshold_RUNNING")
+
 # Sports that use pace (min/km) instead of speed (km/h)
 PACE_SPORTS: frozenset[str] = frozenset({
     "running", "run",
@@ -259,7 +263,7 @@ def normalise_activity(row: dict) -> dict:
     if max_hr: max_hr = round(max_hr, 1)
 
     calories = safe_int(pick(row, "calories", "total_calories", "active_calories"))
-    elev = safe_float(pick(row, "totalAscent", "elevation_gain", "total_ascent", "ascent", "elevation_gain_m"))
+    elev = safe_float(pick(row, "elevationGain", "totalAscent", "elevation_gain", "total_ascent", "ascent", "elevation_gain_m"))
     if elev: elev = round(elev, 1)
 
     cadence = safe_float(pick(row, "average_cadence", "avg_cadence", "averageCadence"))
@@ -481,6 +485,7 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
 # the athlete encounters and verifies them.
 TRAINING_STATUS_MAP: dict[str, str] = {
     "PRODUCTIVE_1": "Productive (Balanced)",
+    "PRODUCTIVE_3": "Productive (High Aerobic Focus — load building well, maintain or increase slightly)",
     "MAINTAINING_2": "Maintaining (High Aerobic Shortage)",
     "MAINTAINING_1": "Maintaining (Balanced)",
     "DETRAINING": "Detraining",
@@ -697,10 +702,21 @@ def query_recent_activities(days: int, sport_type: str | None, limit: int) -> li
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
 
-    return [
+    activities = [
         a for a in (normalise_activity(r) for r in raw_rows)
         if a.get("sport_type") != "no activity"
     ]
+    # Dedup by activity_id — garmin-grafana writes one row per device for the
+    # same activity (e.g. Edge 540 + Forerunner); keep the first occurrence.
+    seen_ids: set = set()
+    deduped: list[dict] = []
+    for a in activities:
+        aid = a.get("activity_id")
+        if aid is None or aid not in seen_ids:
+            deduped.append(a)
+            if aid is not None:
+                seen_ids.add(aid)
+    return deduped
 
 
 def query_resting_hr_weekly(weeks: int) -> list[dict]:
@@ -930,13 +946,18 @@ def query_activity_summary_by_id(activity_id: str) -> list[dict]:
     """
     Return raw ActivitySummary rows for a specific activity ID.
     May include sentinel rows — caller should filter activityType='No Activity'.
+
+    Strategy (v1): try ActivityID tag first (indexed, fast); if empty fall back
+    to Activity_ID integer field scan over the last 5 years (reliable for all
+    garmin-grafana versions regardless of whether the tag was written).
     """
     if INFLUXDB_VERSION == 2:
         q = f'''
         from(bucket: "{INFLUXDB_DATABASE}")
-          |> range(start: -365d)
+          |> range(start: -1825d)
           |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_ACTIVITIES}")
-          |> filter(fn: (r) => r["ActivityID"] == "{activity_id}")
+          |> filter(fn: (r) => r["ActivityID"] == "{activity_id}"
+                            or r["Activity_ID"] == {activity_id})
           |> pivot(rowKey: ["_time"], columnKey: ["_field"], valueColumn: "_value")
         '''
         try:
@@ -944,12 +965,33 @@ def query_activity_summary_by_id(activity_id: str) -> list[dict]:
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
     else:
-        q = (
+        # Try tag-based lookup first (fast, indexed)
+        q_tag = (
             f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '
             f"WHERE \"ActivityID\" = '{activity_id}'"
         )
         try:
-            return _dedup_rows(_v1_query(q))
+            rows = _dedup_rows(_v1_query(q_tag))
+        except Exception as exc:
+            raise ConnectionError(str(exc)) from exc
+
+        if rows:
+            return rows
+
+        # Fall back to field-based lookup — garmin-grafana doesn't always
+        # write the ActivityID tag to ActivitySummary.
+        try:
+            activity_id_int = int(activity_id)
+        except (TypeError, ValueError):
+            return []
+
+        q_field = (
+            f'SELECT * FROM "{MEASUREMENT_ACTIVITIES}" '
+            f'WHERE "Activity_ID" = {activity_id_int} '
+            f"AND time >= now() - 1825d"
+        )
+        try:
+            return _dedup_rows(_v1_query(q_field))
         except Exception as exc:
             raise ConnectionError(str(exc)) from exc
 
@@ -1923,3 +1965,33 @@ def query_cycling_dynamics(activity_id: str) -> dict:
     except Exception as exc:
         logger.warning("query_cycling_dynamics failed: %s", exc)
         return {}
+
+
+def query_lactate_threshold(weeks: int) -> list[dict]:
+    """
+    Return weekly-sampled lactate threshold HR from the LactateThreshold
+    measurement.  Returns [] silently on any error or if the measurement
+    doesn't exist.
+    """
+    days = weeks * 7
+    try:
+        if INFLUXDB_VERSION == 2:
+            q = f'''
+            from(bucket: "{INFLUXDB_DATABASE}")
+              |> range(start: -{days}d)
+              |> filter(fn: (r) => r["_measurement"] == "{MEASUREMENT_LACTATE_THRESHOLD}")
+              |> filter(fn: (r) => r["_field"] == "{FIELD_LACTATE_THRESHOLD_HR_RUNNING}")
+              |> aggregateWindow(every: 1w, fn: last, createEmpty: false)
+            '''
+            return _v2_query(q)
+        else:
+            q = (
+                f'SELECT LAST("{FIELD_LACTATE_THRESHOLD_HR_RUNNING}") AS hr_threshold '
+                f'FROM "{MEASUREMENT_LACTATE_THRESHOLD}" '
+                f'WHERE time >= now() - {days}d '
+                f"GROUP BY time(1w) fill(none) tz('{_QUERY_TZ_NAME}')"
+            )
+            return _v1_query(q)
+    except Exception as exc:
+        logger.debug("query_lactate_threshold failed (non-fatal): %s", exc)
+        return []

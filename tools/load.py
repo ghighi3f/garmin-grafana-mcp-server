@@ -96,8 +96,7 @@ async def get_weekly_load_summary(weeks: int = 4) -> dict[str, Any]:
     # week_label → sport → accumulators
     weekly: dict[str, dict] = defaultdict(lambda: {
         "sports": defaultdict(lambda: {"sessions": 0, "dist_km": 0.0, "dur_min": 0.0}),
-        # raw stress/load fields if present
-        "stress_scores": [],
+        "training_load_sum": 0.0,
     })
 
     for act in rows:
@@ -109,6 +108,7 @@ async def get_weekly_load_summary(weeks: int = 4) -> dict[str, Any]:
         entry["sessions"] += 1
         entry["dist_km"] = round(entry["dist_km"] + (act.get("distance_km") or 0.0), 3)
         entry["dur_min"] = round(entry["dur_min"] + (act.get("duration_minutes") or 0.0), 2)
+        weekly[label]["training_load_sum"] += act.get("training_load") or 0.0
 
     # Build ordered output (newest week first)
     all_labels = sorted(weekly.keys(), reverse=True)
@@ -130,7 +130,7 @@ async def get_weekly_load_summary(weeks: int = 4) -> dict[str, Any]:
             "per_sport": per_sport,
             "avg_resting_hr": rhr_by_week.get(label),
             "hrv_weekly_avg": hrv_by_week.get(label),
-            "stress_or_load_score": None,  # populated only if raw field exists
+            "stress_or_load_score": round(wdata["training_load_sum"], 1) if wdata["training_load_sum"] > 0 else None,
         })
 
     return {"weeks": result_weeks}

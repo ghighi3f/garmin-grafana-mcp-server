@@ -10,7 +10,7 @@ All HTTP transports are always active simultaneously:
 For local subprocess clients (Claude Desktop, Cursor, Windsurf, Claude Code):
   set MCP_TRANSPORT=stdio and run with `python server.py` (no HTTP server).
 
-All nineteen MCP tools work identically across every transport.
+All twenty MCP tools work identically across every transport.
 
 Tools:
   • get_last_activity
@@ -32,6 +32,7 @@ Tools:
   • get_power_zones            (Coggan 7-zone distribution)
   • get_power_history          (per-session power trend)
   • get_cycling_dynamics       (NP, TSS, IF, L/R balance, pedaling metrics)
+  • get_lactate_threshold_trend (LTHR weekly trend)
 
 Also provides a /health REST endpoint and a startup banner.
 """
@@ -82,6 +83,7 @@ from tools.energy_balance import get_daily_energy_balance  # noqa: E402
 from tools.fitness_age import get_fitness_age  # noqa: E402
 from tools.power import get_peak_power, get_power_zones, get_power_history  # noqa: E402
 from tools.cycling_dynamics import get_cycling_dynamics  # noqa: E402
+from tools.lactate import get_lactate_threshold_trend  # noqa: E402
 
 # ---------------------------------------------------------------------------
 # MCP server
@@ -708,6 +710,38 @@ async def get_cycling_dynamics_tool(activity_id: str) -> dict:
         Present instead of the above when no CyclingDynamics data is found.
     """
     return await get_cycling_dynamics(activity_id=activity_id)
+
+
+@mcp.tool()
+async def get_lactate_threshold_trend_tool(weeks: int = 12) -> dict:
+    """
+    Return weekly-sampled lactate threshold heart rate and its trend.
+
+    Lactate threshold HR (LTHR) is the highest average HR you can sustain
+    for ~60 minutes.  Garmin estimates it automatically and stores it in the
+    LactateThreshold measurement.  A rising LTHR indicates cardiovascular
+    adaptation — you can sustain higher HR before crossing into anaerobic.
+
+    Parameters
+    ----------
+    weeks : int
+        Look-back window in weeks.  Range: 4–52.  Default: 12.
+
+    Returns
+    -------
+    current
+        Most recent LTHR reading: hr_threshold_running (bpm), week_label.
+    weeks : list
+        Weekly list (newest first): week_label, hr_threshold_running.
+    trend
+        "improving" | "declining" | "stable"
+    change_bpm
+        Change over the period (positive = improving, LTHR risen).
+    data_note
+        Present when no data is available (e.g. cycling-only athlete,
+        older firmware that doesn't estimate LTHR).
+    """
+    return await get_lactate_threshold_trend(weeks=weeks)
 
 
 # ---------------------------------------------------------------------------

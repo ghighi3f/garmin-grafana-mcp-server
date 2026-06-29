@@ -16,6 +16,53 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `TrainingStatus` measurement so callers can inspect how status has changed
   across recent syncs.
 
+## [1.8.0] - 2026-05-04
+
+### Added
+
+- **`get_lactate_threshold_trend_tool`** — new MCP tool (20th) querying the
+  `LactateThreshold` measurement. Returns the weekly lactate threshold HR
+  (the highest avg HR sustainable for ~60 min) with trend direction and
+  change in bpm over the look-back window. A rising LTHR indicates
+  cardiovascular adaptation.
+  - `weeks` parameter (4–52, default 12).
+  - Gracefully returns a `data_note` when the measurement is absent
+    (e.g. cycling-only athletes or older firmware that doesn't estimate LTHR).
+  - New env vars: `MEASUREMENT_LACTATE_THRESHOLD` (default: `LactateThreshold`),
+    `FIELD_LACTATE_THRESHOLD_HR_RUNNING` (default: `HeartRateThreshold_RUNNING`).
+  - New query function `query_lactate_threshold()` in `influx.py`.
+  - New tool module: `tools/lactate.py`.
+
+### Fixed
+
+- **`get_activity_details_tool` broken for cycling activities** — the
+  `query_activity_summary_by_id` function was filtering by the `ActivityID`
+  tag, which recent garmin-grafana versions do not write to `ActivitySummary`.
+  Now falls back to a field-based query on `Activity_ID` (integer field) when
+  the tag lookup returns empty. Confirmed working: the tool now returns full
+  lap data, cadence, power, training effect, and elevation for cycling activities.
+
+- **Duplicate activities in `get_recent_activities_tool`** — garmin-grafana
+  writes one row per paired device (e.g. Edge 540 + Forerunner 165) for the
+  same activity. `query_recent_activities` was missing the deduplication step
+  applied in `query_all_activities`. Added post-normalisation dedup by
+  `activity_id` — the same activity now appears exactly once.
+
+- **`elevation_gain_m` always null** — `normalise_activity` was trying
+  `totalAscent` first (a field that does not exist in `ActivitySummary`).
+  The actual field name is `elevationGain`. Added it as the first candidate in
+  the `pick()` call. Elevation now returns correctly for all activities.
+
+- **`highest_avg_hr` artefact in `get_personal_records_tool`** — a sustained
+  average HR ≥ 185 bpm over a full activity is physiologically impossible and
+  indicates a sensor glitch. Records with `avg_hr >= 185` are now silently
+  skipped, exposing the true best real-world effort.
+
+- **`stress_or_load_score` always null in `get_weekly_load_summary_tool`** —
+  the field was hardcoded to `None`. Now computed as the sum of
+  `activityTrainingLoad` across all activities in each ISO week (data already
+  in memory from the activity fetch — no additional query).
+
 ## [1.7.0] - 2026-04-30
 
 ### Added

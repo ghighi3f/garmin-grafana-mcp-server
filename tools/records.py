@@ -67,6 +67,11 @@ def _compute_records(activities: list[dict], sport: str) -> dict:
             val = safe_float(act.get(field))
             if val is None:
                 continue
+            # Physiologically impossible avg_hr values are sensor artefacts.
+            # A true average HR ≥ 185 bpm sustained over a full activity cannot
+            # happen; cap it to avoid polluting the record with a bad reading.
+            if rec_key == "highest_avg_hr" and val >= 185:
+                continue
             current = best.get(rec_key)
             if current is None or val > current[0]:
                 best[rec_key] = (val, act)

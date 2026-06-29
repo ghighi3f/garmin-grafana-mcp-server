@@ -17,7 +17,7 @@ from typing import Any
 import influx
 
 
-async def get_training_status() -> dict[str, Any]:
+async def get_training_status(limit: int = 1) -> dict[str, Any]:
     """
     Return the latest Training Status and Training Readiness data.
 
@@ -26,7 +26,7 @@ async def get_training_status() -> dict[str, Any]:
     note explains why — the server never crashes.
     """
     status, readiness = await asyncio.gather(
-        asyncio.to_thread(influx.query_latest_training_status),
+        asyncio.to_thread(influx.query_latest_training_status, limit),
         asyncio.to_thread(influx.query_latest_training_readiness),
     )
 

@@ -481,6 +481,10 @@ def normalise_lap(row: dict, sport: str = "unknown") -> dict:
 # the athlete encounters and verifies them.
 TRAINING_STATUS_MAP: dict[str, str] = {
     "PRODUCTIVE_1": "Productive (Balanced)",
+    "PRODUCTIVE_3": "Productive (High Aerobic Focus — load building well, maintain or increase slightly)",
+    "PRODUCTIVE_4": "Productive (Building — acute load rising above chronic, training stimulus increasing)",
+    "PRODUCTIVE_5": "Productive (Strong Build — acute load significantly above chronic, high training stimulus)",
+    "PEAKING_1": "Peaking (Load tapering — acute load dropping below chronic, fitness is consolidating)",
     "MAINTAINING_2": "Maintaining (High Aerobic Shortage)",
     "MAINTAINING_1": "Maintaining (Balanced)",
     "DETRAINING": "Detraining",
@@ -1358,12 +1362,15 @@ def _query_all_max_power_from_gps() -> dict[str, float]:
         return {}
 
 
-def query_latest_training_status() -> dict | None:
+def query_latest_training_status(limit: int = 1) -> dict | list[dict] | None:
     """
-    Return the most recent TrainingStatus row, or None if unavailable.
+    Return the most recent TrainingStatus row(s), or None if unavailable.
+    When limit=1 (default) returns a single dict.  When limit>1 returns a
+    list (newest first) of up to `limit` rows.
     Non-fatal: missing measurement, empty result, or any DB error all return None.
     """
-    q = f'SELECT * FROM "{MEASUREMENT_TRAINING_STATUS}" ORDER BY time DESC LIMIT 1'
+    limit = max(1, min(int(limit), 365))
+    q = f'SELECT * FROM "{MEASUREMENT_TRAINING_STATUS}" ORDER BY time DESC LIMIT {limit}'
     try:
         rows = _v1_query(q)
     except Exception as exc:
@@ -1371,7 +1378,8 @@ def query_latest_training_status() -> dict | None:
         return None
     if not rows:
         return None
-    return _normalise_training_status(rows[0])
+    normalised = [_normalise_training_status(r) for r in rows]
+    return normalised[0] if limit == 1 else normalised
 
 
 def query_latest_training_readiness() -> dict | None:

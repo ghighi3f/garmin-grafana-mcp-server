@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-06-30
+
 ### Changed
 
 - **`get_training_status_tool`** — added optional `limit` parameter (default 1,
@@ -62,6 +64,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the field was hardcoded to `None`. Now computed as the sum of
   `activityTrainingLoad` across all activities in each ISO week (data already
   in memory from the activity fetch — no additional query).
+
 
 ## [1.7.0] - 2026-04-30
 

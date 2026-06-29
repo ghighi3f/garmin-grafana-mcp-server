@@ -416,21 +416,31 @@ async def get_personal_records_tool(sport_type: str = "all") -> dict:
 
 
 @mcp.tool()
-async def get_training_status_tool() -> dict:
+async def get_training_status_tool(limit: int = 1) -> dict:
     """
-    Fetch the latest Training Status and Training Readiness from InfluxDB.
+    Fetch Training Status and Training Readiness from InfluxDB.
 
-    No input parameters required.
+    Parameters
+    ----------
+    limit : int
+        Number of TrainingStatus rows to return, newest first.
+        1 (default) returns the single latest entry as a dict.
+        2–365 returns a list of entries — useful for inspecting how
+        status has changed over recent days (each sync writes one row).
 
     Returns
     -------
     training_status
-        Most recent entry from the TrainingStatus measurement, containing:
+        When limit=1: a single dict with the most recent entry.
+        When limit>1: a list of dicts (newest first), each containing:
         - status_code         : Garmin training status enum (integer)
-        - status_label        : Raw FIT SDK phrase code (e.g. "PRODUCTIVE_6")
-        - garmin_coaching_advice : Human-readable coaching text decoded from the
-                               FIT SDK training_status_feedback_phrase enum
-                               (e.g. "Primarily aerobic training"); null if unknown
+        - status_label        : Raw Garmin Connect phrase code
+                               (e.g. "PRODUCTIVE_3", "RECOVERY_1").
+                               Confirmed codes are decoded into
+                               garmin_coaching_advice; unrecognised codes
+                               appear as "(UNMAPPED_STATUS)" there.
+        - garmin_coaching_advice : Human-readable coaching text for known
+                               codes; null or "(UNMAPPED_STATUS)" otherwise.
         - acute_load          : 7-day acute training load
         - chronic_load        : 28-day chronic training load (CTL)
         - load_balance_ratio  : Acute / chronic workload ratio (ACWR)
@@ -449,7 +459,7 @@ async def get_training_status_tool() -> dict:
     data_note / training_readiness_note
         Present only when a measurement is unavailable; explains why.
     """
-    return await get_training_status()
+    return await get_training_status(limit=limit)
 
 
 @mcp.tool()

@@ -17,7 +17,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (newest first), exposing the full historical time series stored in the
   `TrainingStatus` measurement so callers can inspect how status has changed
   across recent syncs.
-
 ## [1.8.0] - 2026-05-04
 
 ### Added
@@ -58,7 +57,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **`highest_avg_hr` artefact in `get_personal_records_tool`** — a sustained
   average HR ≥ 185 bpm over a full activity is physiologically impossible and
   indicates a sensor glitch. Records with `avg_hr >= 185` are now silently
-  excluded from personal records.
+  skipped, exposing the true best real-world effort.
+
+- **`stress_or_load_score` always null in `get_weekly_load_summary_tool`** —
+  the field was hardcoded to `None`. Now computed as the sum of
+  `activityTrainingLoad` across all activities in each ISO week (data already
+  in memory from the activity fetch — no additional query).
+
 
 ## [1.7.0] - 2026-04-30
 

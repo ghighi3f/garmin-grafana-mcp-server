@@ -141,8 +141,8 @@ services:
       # MEASUREMENT_BODY_COMPOSITION: BodyComposition
       #
       # Field names:
-      # FIELD_RESTING_HR: resting_hr
-      # FIELD_HRV: hrv5MinHigh
+      # FIELD_RESTING_HR: restingHeartRate
+      # FIELD_HRV: hrvValue
       # FIELD_VO2_MAX_RUNNING: VO2_max_value
       # FIELD_VO2_MAX_CYCLING: VO2_max_value_cycling
       # FIELD_RACE_5K: time5K
@@ -718,6 +718,23 @@ Returns advanced pedaling efficiency metrics for a single activity. Requires the
 - `left_pedal` / `right_pedal` — `torque_effectiveness` (%), `pedal_smoothness` (%), `platform_center_offset_mm`, `power_phase {start_deg, end_deg}`, `power_phase_peak {start_deg, end_deg}`
 - `data_note` — present instead of the above when no CyclingDynamics data is found
 
+### `get_lactate_threshold_trend`
+
+Returns weekly-sampled lactate threshold heart rate (LTHR) and its trend. LTHR is the highest average HR you can sustain for ~60 minutes and is the key anchor for defining training zones (Z2 ceiling, Z4 floor). A rising LTHR indicates cardiovascular adaptation.
+
+| Parameter | Type | Default | Range |
+|---|---|---|---|
+| `weeks` | int | `12` | 4–52 |
+
+**Returns:**
+- `current` — most recent LTHR reading: `hr_threshold_running` (bpm) and `week_label`
+- `weeks` — list (newest first) of `{ week_label, hr_threshold_running }` entries
+- `trend` — `"improving"` | `"declining"` | `"stable"`
+- `change_bpm` — change over the period (positive = LTHR risen = improving)
+- `data_note` — present instead of the above when no `LactateThreshold` data is found (e.g. older firmware)
+
+> **Graceful degradation:** if the `LactateThreshold` measurement is absent from your InfluxDB (requires Garmin device firmware that estimates LTHR automatically), the tool returns a `data_note` explaining why rather than an error.
+
 ---
 
 ## Example prompts
@@ -751,6 +768,8 @@ Returns advanced pedaling efficiency metrics for a single activity. Requires the
 "Show me my Coggan power zone distribution for the last ride. How much time in Z2 vs Z4+?"
 
 "Has my average power been improving or declining over the last month of rides?"
+
+"What is my lactate threshold HR and has it improved over the last 3 months?"
 ```
 
 ---
@@ -780,13 +799,14 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `MEASUREMENT_SLEEP_INTRADAY` | `SleepIntraday` |
 | `MEASUREMENT_FITNESS_AGE` | `FitnessAge` |
 | `MEASUREMENT_CYCLING_DYNAMICS` | `CyclingDynamics` |
+| `MEASUREMENT_LACTATE_THRESHOLD` | `LactateThreshold` |
 
 ### Field names
 
 | Variable | Default | Used in |
 |---|---|---|
-| `FIELD_RESTING_HR` | `resting_hr` | Weekly load |
-| `FIELD_HRV` | `hrv5MinHigh` | Weekly load |
+| `FIELD_RESTING_HR` | `restingHeartRate` | Weekly load |
+| `FIELD_HRV` | `hrvValue` | Weekly load |
 | `FIELD_VO2_MAX_RUNNING` | `VO2_max_value` | Fitness trend |
 | `FIELD_VO2_MAX_CYCLING` | `VO2_max_value_cycling` | Fitness trend |
 | `FIELD_RACE_5K` | `time5K` | Fitness trend |
@@ -825,6 +845,7 @@ Override these if your garmin-grafana schema uses different measurement names:
 | `FIELD_FITNESS_AGE` | `fitnessAge` | Current fitness age |
 | `FIELD_CHRONOLOGICAL_AGE` | `chronologicalAge` | Actual age |
 | `FIELD_ACHIEVABLE_FITNESS_AGE` | `achievableFitnessAge` | Optimal achievable fitness age |
+| `FIELD_LACTATE_THRESHOLD_HR_RUNNING` | `HeartRateThreshold_RUNNING` | Lactate threshold HR (running) |
 
 ### Server
 
@@ -881,6 +902,7 @@ garmin-grafana-mcp-server/
 │   ├── activity_load.py   — get_activity_load_history
 │   ├── energy_balance.py  — get_daily_energy_balance
 │   ├── fitness_age.py     — get_fitness_age
+│   ├── lactate.py         — get_lactate_threshold_trend
 │   └── cycling_dynamics.py — get_cycling_dynamics
 │   └── power.py           — get_peak_power, get_power_zones, get_power_history
 ├── Dockerfile

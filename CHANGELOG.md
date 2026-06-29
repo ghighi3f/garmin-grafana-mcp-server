@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-06-30
+
+### Changed
+
+- **`get_training_status_tool`** — added optional `limit` parameter (default 1,
+  range 1–365).  When `limit=1` (default) the response is unchanged — a single
+  `training_status` dict.  When `limit>1` the tool returns a list of rows
+  (newest first), exposing the full historical time series stored in the
+  `TrainingStatus` measurement so callers can inspect how status has changed
+  across recent syncs.
 ## [1.8.0] - 2026-05-04
 
 ### Added
@@ -55,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in memory from the activity fetch — no additional query).
 
 
+## [1.7.0] - 2026-04-30
 
 ### Added
 
